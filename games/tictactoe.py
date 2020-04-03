@@ -43,18 +43,20 @@ def make_tictactoe_config(window_size=int(1e3), batch_size=2048,
 
 
 class TicTacToeEnvironment(Environment):
-    """The environment of tic-tac-toe."""
+    """
+    The environment class of tic-tac-toe.
+    """
 
     def __init__(self, **kwargs):  # kwargs collects arguments not used here (network parameters)
         """
-        Create the environment where Tic-Tac-Toe is played
+        Create the environment where tic-tac-toe is played, initialize to an empty board.
         """
 
         # Game parameters
         self.action_space_size = 9
         self.num_players = 2
 
-        # Game state
+        # Game state (board[i,j] == -1 if cell is empty, player_id if cell is filled)
         self.board = -np.ones(shape=(3, 3), dtype=np.int)
         self.steps = 0
         self.ended = False
@@ -78,12 +80,14 @@ class TicTacToeEnvironment(Environment):
         return self.ended
 
     def outcome(self):
-        return 1-2*self.winner.player_id if self.winner else 0
+        assert self.ended
+
+        if self.winner:
+            return {player: 1.0 if player == self.winner else 0.0 for player in self.players()}
+        else:
+            return {player: 0.5 for player in self.players()}
 
     def step(self, action: Action):
-        """
-        Make a move, return the reward.
-        """
         assert not self.ended and self.is_legal_action(action)
 
         # Find the position of this move
@@ -97,9 +101,9 @@ class TicTacToeEnvironment(Environment):
 
         # Check if the game ended
         for i in range(3):
-            if (self.board[i, :] == player_id).all() or (self.board[:, i] == player_id).all():
+            if np.all(self.board[i, :] == player_id) or np.all(self.board[:, i] == player_id):
                 self.ended = True
-        if (self.board.diagonal() == player_id).all() or (np.flip(self.board, axis=0).diagonal() == player_id).all():
+        if np.all(self.board.diagonal() == player_id) or np.all(np.flip(self.board, axis=0).diagonal() == player_id):
             self.ended = True
         if self.ended:
             self.winner = Player(player_id)
@@ -113,10 +117,6 @@ class TicTacToeEnvironment(Environment):
         return {player: 0.0 for player in self.players()}
 
     def get_state(self):
-        """
-        Return the current state of the environment (in some canonical form, encoding is done elsewhere).
-        """
-
         return [np.where(self.board == 0, 1, 0), np.where(self.board == 1, 1, 0)]
 
     def print_state(self):
@@ -131,12 +131,12 @@ class TicTacToeEnvironment(Environment):
 
 
 class TicTacToeGame(Game):
-    """For recording games of tic-tac-toe."""
-
     def __init__(self, **game_params):
         super().__init__()
         self.environment = TicTacToeEnvironment(**game_params)
-        self.history = GameHistory(initial_state=self.make_image(), action_space_size=self.environment.action_space_size, num_players=self.environment.num_players)
+        self.history = GameHistory(initial_state=self.make_image(),
+                                   action_space_size=self.environment.action_space_size,
+                                   num_players=self.environment.num_players)
 
     def make_image(self):
         return np.transpose(np.array(self.environment.get_state()), (1, 2, 0)).astype(np.float32)

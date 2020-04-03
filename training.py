@@ -1,11 +1,7 @@
 from storage_replay import *
 from evaluation import *
 import tensorflow as tf
-import os, datetime
-
-
-def timestamp():
-    return datetime.datetime.now().strftime("%d-%m-%Y--%H-%M")
+import os
 
 
 def tensorboard_summary(model, line_length=100):
@@ -19,12 +15,23 @@ def tensorboard_summary(model, line_length=100):
     return result
 
 
-def synchroneous_train_network(config, storage, num_games, num_steps, num_eval_games, checkpoint_path=None):
-    replay_buffer = ReplayBuffer(config)
-    network = storage.latest_network()
-    optimizer = tf.keras.optimizers.Adam(lr=config.learning_rate)
+def loss_logger(summary_writer, metrics, step):
+    print(('{},' + ','.join('{:.4f}' for _ in range(len(metrics) + 1))).format(step, *[metric.result() for metric in metrics], sum(metric.result() for metric in metrics)))
+    if summary_writer:
+        with summary_writer.as_default():
+            tf.summary.scalar(name='Losses/Total', data=sum(metric.result() for metric in metrics), step=step)
+            for metric in metrics:
+                tf.summary.scalar(name=metric.name, data=metric.result(), step=step)
 
-    # Tensorboard logging
+
+def evaluation_logger(summary_writer, evaluation_stats, step):
+    if summary_writer:
+        with summary_writer.as_default():
+            for player, result in evaluation_stats.items():
+                tf.summary.scalar(name='Evaluation/{}'.format(player), data=result, step=step)
+
+
+def tensorboard_logger(config, checkpoint_path, network):
     if checkpoint_path:
         checkpoint_dir = os.path.join(checkpoint_path, config.name, timestamp())
         log_dir = os.path.join(checkpoint_dir, 'logs')
@@ -50,12 +57,19 @@ def synchroneous_train_network(config, storage, num_games, num_steps, num_eval_g
     else:
         checkpoint_dir = None
         summary_writer = None
+    return checkpoint_dir, summary_writer
+
+
+def synchroneous_train_network(config, network, num_games, num_steps, num_eval_games, checkpoint_path=None):
+    replay_buffer = ReplayBuffer(config)
+    optimizer = tf.keras.optimizers.Adam(lr=config.learning_rate)
+
+    # Tensorboard logging
+    checkpoint_dir, summary_writer = tensorboard_logger(config, checkpoint_path, network)
 
     # Actual training
     for step in range(config.training_steps):
         if step % num_steps == 0:
-            storage.save_network(step, network)
-
             batch_selfplay(config, replay_buffer, network, num_games)
 
             # Self-play logging
@@ -69,17 +83,8 @@ def synchroneous_train_network(config, storage, num_games, num_steps, num_eval_g
                 network.save_weights(os.path.join(checkpoint_dir, '{}_it{}'.format(config.name, step)))
 
             if num_eval_games:
-                evaluation_stats = evaluate_agents(config, ['random', network], num_eval_games)
-
-                # Evaluation logging
-                if summary_writer:
-                    with summary_writer.as_default():
-                        tf.summary.text(name='Evaluation',
-                                        data='{:.2f}% won games, {:.2f}% lost games, {:.2f}% drawn games'.format(
-                                            100 * evaluation_stats[-1] / num_eval_games,
-                                            100 * evaluation_stats[1] / num_eval_games,
-                                            100 * evaluation_stats[0] / num_eval_games),
-                                        step=step)
+                evaluation_stats = evaluate_agent(config, network, num_eval_games)
+                evaluation_logger(summary_writer, evaluation_stats, step)
 
             # learning_rate = config.lr_init*config.lr_decay_rate ** (network.training_steps() / config.lr_decay_steps)
             #      optimizer = tf.keras.optimizers.SGD(lr=learning_rate, momentum=config.momentum)
@@ -91,21 +96,39 @@ def synchroneous_train_network(config, storage, num_games, num_steps, num_eval_g
 
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps, config.discount)
         metrics = batch_update_weights(config, network, optimizer, batch)
+        loss_logger(summary_writer, metrics, step)
 
-        print(('{},'+','.join('{:.4f}' for _ in range(len(metrics)+1))).format(step, *[metric.result() for metric in metrics], sum(metric.result() for metric in metrics)))
-        if summary_writer:
-            with summary_writer.as_default():
-                tf.summary.scalar(name='Losses/Total', data=sum(metric.result() for metric in metrics), step=step)
-                for metric in metrics:
-                    tf.summary.scalar(name=metric.name, data=metric.result(), step=step)
-
-    storage.save_network(config.training_steps, network)
     if checkpoint_dir:
         network.save_weights(os.path.join(checkpoint_dir, '{}_it{}'.format(config.name, config.training_steps)))
 
 
+def train_network(config, server_address, num_eval_games, tensorboard_logpath=None):
+    client = MuZeroClient(config, server_address)
+    network = client.latest_network()
+    optimizer = tf.keras.optimizers.Adam(lr=config.learning_rate)
+
+    # Tensorboard logging
+    tensorboard_logdir, summary_writer = tensorboard_logger(config, tensorboard_logpath, network)
+    print('Tensorboard logging in directory {}'.format(tensorboard_logdir))
+
+    for step in range(config.training_steps):
+        if step % config.checkpoint_interval == 0:
+            client.save_network(network)
+
+            if num_eval_games:
+                evaluation_stats = evaluate_agent(config, network, num_eval_games)
+                evaluation_logger(summary_writer, evaluation_stats, step)
+
+        batch = client.sample_batch()
+        metrics = batch_update_weights(config, network, optimizer, batch)
+        loss_logger(summary_writer, metrics, step)
+    client.save_network(network)
+
+
 def scale_gradient(tensor, scale):
-    """Scales the gradient for the backward pass."""
+    """
+    Scales the gradient for the backward pass.
+    """
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
@@ -154,7 +177,7 @@ def batch_update_weights(config, network, optimizer, batch):
             policy_loss = tf.keras.losses.categorical_crossentropy(batch_target_policy_logits, batch_policy_logits, from_logits=True)
             policy_loss_metric(policy_loss)
 
-            loss += tf.math.reduce_mean(value_loss + policy_loss)/(config.num_unroll_steps+1)
+            loss += tf.math.reduce_mean(scale_gradient(value_loss + policy_loss, gradient_scale))/(config.num_unroll_steps+1)
 
             if predict_reward:
                 reward_loss = config.reward_loss(batch_target_reward, batch_reward)
@@ -162,9 +185,7 @@ def batch_update_weights(config, network, optimizer, batch):
 
                 toplay_loss = tf.keras.losses.sparse_categorical_crossentropy(batch_target_toplay, batch_toplay, from_logits=True)
                 toplay_loss_metric(toplay_loss)
-                loss += tf.math.reduce_mean(reward_loss + toplay_loss)/config.num_unroll_steps
-
-            # loss += scale_gradient(value_loss + reward_loss + tf.math.reduce_mean(policy_loss), gradient_scale)
+                loss += tf.math.reduce_mean(scale_gradient(reward_loss + toplay_loss, gradient_scale))/config.num_unroll_steps
 
         for weights in network.get_weights():
             l2_regularization = config.weight_decay * tf.nn.l2_loss(weights)
@@ -175,17 +196,4 @@ def batch_update_weights(config, network, optimizer, batch):
     optimizer.apply_gradients(zip(grads, network.trainable_variables))
     network.steps += 1
 
-    # Logging
-    # if summary_writer:
-    #     with summary_writer.as_default():
-    #         tf.summary.scalar(name='Losses/Total', data=loss.numpy(), step=network.training_steps())
-    #         tf.summary.scalar(name='Losses/Value', data=value_loss_metric.result(), step=network.training_steps())
-    #         tf.summary.scalar(name='Losses/Reward', data=reward_loss_metric.result(), step=network.training_steps())
-    #         tf.summary.scalar(name='Losses/Policy', data=policy_loss_metric.result(), step=network.training_steps())
-    #         tf.summary.scalar(name='Losses/Regularization', data=regularization_loss.numpy(), step=network.training_steps())
-
-    # print('{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f}'.format(network.training_steps(), value_loss_metric.result(),
-    #                                                      reward_loss_metric.result(), policy_loss_metric.result(),
-    #                                                      toplay_loss_metric.result(),
-    #                                                      regularization_metric.result(), loss.numpy()))
     return value_loss_metric, reward_loss_metric, policy_loss_metric, toplay_loss_metric, regularization_metric

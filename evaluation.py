@@ -21,17 +21,23 @@ def batch_agent_duel(config, agents, games):
         games = [game for game in games if not (game.terminal() or len(game.history) == config.max_moves)]
 
 
-def evaluate_agents(config, agents, num_games):
+def evaluate_agent(config, agent, num_games):
     games = [config.new_game() for _ in range(num_games)]
+
+    agents = ['random'] * len(games[0].environment.players())
+    agents[-1] = agent
 
     start = time.time()
     batch_agent_duel(config, agents, games)
     end = time.time()
     print('Evaluation finished in {:.2f} seconds, {:.2f} seconds per game!'.format(end-start, (end-start)/num_games))
 
-    stats = {-1: 0, 0: 0, 1: 0}
+    stats = {}
     for game in games:
-        stats[game.outcome()] += 1
+        for player, result in game.outcome().items():
+            stats[player] = stats.get(player, 0.0) + result
+    for player in stats.keys():
+        stats[player] /= num_games
     print('Evaluation results: {}'.format(stats))
     return stats
 
@@ -48,5 +54,5 @@ def play_against_network(config, network, human_player_id=None, verbose=True):
                 print('MuZero policy: {}'.format(game.history.policies[-1]))
                 print('MuZero plays: {}'.format(game.history.actions[-1].index))
         if verbose:
-            print(game.history.rewards[-1])
+            print('Reward: {}'.format(game.history.rewards[-1]))
             game.environment.print_state()

@@ -103,4 +103,7 @@ class Game:
         )
 
     def make_image(self):
+        """
+        Encode the state representation (returned by environment.get_state) into an np.array.
+        """
         raise ImplementationError('make_image', 'Game')

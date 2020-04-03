@@ -140,7 +140,7 @@ def batch_make_move(config, network, games):
 
     for root, game, initial_inference in zip(batch_root, games, batch_initial_inference.split_batch()):
         expand_node(root, game.to_play(), game.legal_actions(), initial_inference)
-        # add_exploration_noise(config, root)
+        add_exploration_noise(config, root)
 
     batch_mcts(config, batch_root, network)
 

@@ -162,7 +162,8 @@ class Network:
         raise ImplementationError('recurrent_inference', 'Network')
 
     def __str__(self):
-        return 'Network({})'.format({model.name: {'parameters': model.count_params(),
-                                                  'input_shape': model.input_shape,
-                                                  'output_shape': model.output_shape}
-                                     for model in [self.representation, self.dynamics, self.prediction]})
+        return 'Network({}, trining_steps={})'.format(
+            {model.name: {'parameters': model.count_params(),
+                          'input_shape': model.input_shape,
+                          'output_shape': model.output_shape} for model in [self.representation, self.dynamics, self.prediction]},
+            self.training_steps())

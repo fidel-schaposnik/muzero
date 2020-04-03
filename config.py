@@ -64,3 +64,6 @@ class MuZeroConfig:
 
     def new_game(self):
         return self.game_class(**self.game_params)
+
+    def make_uniform_network(self, **game_params):
+        return self.network_class(**game_params)
