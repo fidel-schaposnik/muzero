@@ -1,29 +1,6 @@
-import numpy as np
-import tensorflow as tf
+from utils import *
 from math import sqrt, log, exp
-from environment import *
 import random
-
-MAXIMUM_FLOAT_VALUE = float('inf')
-
-
-class MinMaxStats:
-    """
-    A class that holds the min-max values of the tree.
-    """
-
-    def __init__(self, known_bounds=None):
-        self.minimum, self.maximum = known_bounds if known_bounds else (MAXIMUM_FLOAT_VALUE, -MAXIMUM_FLOAT_VALUE)
-
-    def update(self, value: float):
-        self.maximum = max(self.maximum, value)
-        self.minimum = min(self.minimum, value)
-
-    def normalize(self, value: float) -> float:
-        if self.maximum > self.minimum:
-            # We normalize only when we have set the maximum and minimum values.
-            return (value - self.minimum) / (self.maximum - self.minimum)
-        return value
 
 
 class Node:
@@ -47,19 +24,22 @@ class Node:
             return self.reward_dict.get(self.gets_reward, 0) + discount * self.value_dict_sum.get(self.gets_reward, 0) / self.num_simulations
 
 
-def select_leaf(config, node):
+def select_leaf(config, node, min_max_stats):
     while node.expanded():
-        action, node = select_child(config, node)
+        action, node = select_child(config, node, min_max_stats)
     return action, node
 
 
-def select_child(config, node):
-    _, action, child = max((ucb_score(config, child), action, child) for action, child in node.children.items())
+def select_child(config, node, min_max_stats):
+    # if not node.parent:
+    #     print({action: child.value(config.discount) for action, child in node.children.items()})
+    _, action, child = max((ucb_score(config, child, min_max_stats), action, child) for action, child in node.children.items())
     return action, child
 
 
-def ucb_score(config, node):
-    return node.value(config.discount) + node.prior * sqrt(2 * log(node.parent.num_simulations + 1) / (node.num_simulations + 1))
+def ucb_score(config, node, min_max_stats):
+    return min_max_stats.normalize(node.value(config.discount)) + node.prior * sqrt(2*node.parent.num_simulations)/(node.num_simulations + 1)
+    # return node.value(config.discount) + node.prior * sqrt(2 * log(node.parent.num_simulations + 1) / (node.num_simulations + 1))
     # pb_c = math.log((parent.visit_count + config.pb_c_base + 1) / config.pb_c_base) + config.pb_c_init
     # pb_c *= math.sqrt(parent.visit_count) / (child.visit_count + 1)
     # prior_score = pb_c * child.prior
@@ -78,27 +58,29 @@ def expand_node(node, to_play, actions, network_output):
     node.hidden_state = network_output.hidden_state
 
 
-def backpropagate(node, value_dict, discount):
+def backpropagate(node, value_dict, discount, min_max_stats):
     while node:
+        for player, value in value_dict.items():
+            node.value_dict_sum[player] = node.value_dict_sum.setdefault(player, 0) + value
         node.num_simulations += 1
+        min_max_stats.update(node.value(discount))
+
         for player, value in value_dict.items():
             value_dict[player] *= discount
         for player, reward in node.reward_dict.items():
             value_dict[player] = reward + value_dict.setdefault(player, 0)
-        for player, value in value_dict.items():
-            node.value_dict_sum[player] = node.value_dict_sum.setdefault(player, 0) + value_dict[player]
         node = node.parent
 
 
 def batch_mcts(config, batch_root, network):
-    # min_max_stats = MinMaxStats(config.known_bounds)
+    min_max_stats = MinMaxStats(config.known_bounds)
 
     batch_hidden_state = np.empty(network.hidden_state_shape(len(batch_root)), dtype=np.float32)
 
     for _ in range(config.num_simulations):
         batch_leaf, batch_last_action = [], []
         for i, root in enumerate(batch_root):
-            last_action, leaf = select_leaf(config, root)
+            last_action, leaf = select_leaf(config, root, min_max_stats)
             batch_last_action.append(last_action)
             batch_leaf.append(leaf)
             batch_hidden_state[i] = leaf.parent.hidden_state
@@ -106,8 +88,8 @@ def batch_mcts(config, batch_root, network):
         batch_network_output = network.recurrent_inference(batch_hidden_state, batch_last_action)
 
         for leaf, network_output in zip(batch_leaf, batch_network_output.split_batch()):
-            expand_node(leaf, Player(tf.math.argmax(network_output.to_play)), config.action_space, network_output)
-            backpropagate(leaf, network_output.value, config.discount)
+            expand_node(leaf, network_output.to_play, config.action_space, network_output)
+            backpropagate(leaf, network_output.value, config.discount, min_max_stats)
 
 
 def softmax_sample(distribution, temperature: float):
@@ -119,9 +101,9 @@ def softmax_sample(distribution, temperature: float):
         return random.choices(distribution, weights=weights)[0]
 
 
-def select_action(config, node, num_moves, training_steps):
+def select_action(config, node, num_moves, num_steps):
     visit_counts = [(child.num_simulations, action) for action, child in node.children.items()]
-    temperature = config.visit_softmax_temperature_fn(num_moves=num_moves, training_steps=training_steps)
+    temperature = config.visit_softmax_temperature_fn(num_moves=num_moves, num_steps=num_steps)
     _, action = softmax_sample(visit_counts, temperature)
     return action
 

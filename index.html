@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+    <title>MuZero server summary</title>
+
+<style>
+table {
+  border: 1px solid black;
+  border-spacing: 7px;
+}
+</style>
+</head>
+
+<body>
+
+<center>
+<h1>MuZero server summary</h1>
+
+    <table>
+        <tr>
+            <td align="right"><b>Latest network at step:</b></td>
+            <td>latest_step</td>
+        </tr>
+        <tr>
+            <td align="right"><b>Number of games:</b></td>
+            <td>num_games</td>
+        </tr>
+        <tr>
+            <td align="right"><b>Number of positions:</b></td>
+            <td>num_positions</td>
+        </tr>
+        <tr>
+            <td align="right"><b>Number of unique games:</b></td>
+            <td>num_unique</td>
+        </tr>
+        <tr>
+            <td align="right"><b>Total number of games so far:</b></td>
+            <td>total_games</td>
+        </tr>
+        <tr>
+            <td align="right"><b>Number of game backup files:</b></td>
+            <td>num_backups</td>
+        </tr>
+        <tr>
+            <td align="right"><b>Number of training batches:</b></td>
+            <td>num_batches</td>
+        </tr>
+    </table>
+
+<h1>Load networks</h1>
+
+    <form action="storage" method="post" enctype="multipart/form-data">
+        <table>
+            <tr>
+                <td align="right"><b>Representation:</b></td>
+                <td><input type="file" name="representation"></td>
+            </tr>
+            <tr>
+                <td align="right"><b>Dynamics:</b></td>
+                <td><input type="file" name="dynamics"></td>
+            </tr>
+            <tr>
+                <td align="right"><b>Prediction:</b></td>
+                <td><input type="file" name="prediction"></td>
+            </tr>
+            <tr>
+                <td align="right"><b>Step:</b></td>
+                <td><input type="number" name="step"></td>
+            </tr>
+            <tr align="center">
+                <td colspan="2"><input type="submit" value="Upload"></td>
+            </tr>
+        </table>
+    </form>
+	
+<h1>Load game buffer</h1>
+
+    <form action="replay_buffer" method="post" enctype="multipart/form-data">
+		<table>
+            <tr>
+                <td align="right"><b>Pickled game histories:</b></td>
+                <td><input type="file" name="histories"></td>
+                <td><input type="submit" value="Upload"></td>
+            </tr>
+		</table>
+	</form>
+	
+</center>
+
+</body>
+
+</html>

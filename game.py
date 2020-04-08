@@ -7,22 +7,29 @@ class GameHistory:
     Book-keeping class for completed games.
     """
 
-    def __init__(self, initial_state, action_space_size, num_players):
-        self.observations = [initial_state]
+    def __init__(self, action_space_size, num_players):
+        self.action_space_size = action_space_size
+        self.uniform_policy = [1 / action_space_size for _ in range(action_space_size)]
+        self.players = [Player(i) for i in range(num_players)]
+        self.action_list_hash = None
+
+        self.observations = []
         self.actions = []
         self.rewards = []
         self.to_plays = []
         self.root_values = []
         self.policies = []
 
-        self.uniform_policy = [1 / action_space_size for _ in range(action_space_size)]
-        self.players = [Player(i) for i in range(num_players)]
-
     def __str__(self):
         return 'Game({})'.format(', '.join(map(str, self.actions)))
 
     def __len__(self):
         return len(self.actions)
+
+    def __hash__(self):
+        if not self.action_list_hash:
+            self.action_list_hash = sum(action.index * self.action_space_size**i for i, action in enumerate(self.actions))
+        return self.action_list_hash
 
     def make_target(self, state_index, num_unroll_steps, td_steps, discount):
         targets = []
@@ -70,9 +77,9 @@ class Game:
     A class to record episodes of interaction with an Environment.
     """
 
-    def __init__(self):
-        self.environment = None
-        self.history = None
+    def __init__(self, environment):
+        self.environment = environment
+        self.history = GameHistory(action_space_size=environment.action_space_size, num_players=environment.num_players)
 
     def to_play(self):
         return self.environment.to_play()

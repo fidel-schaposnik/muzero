@@ -1,5 +1,6 @@
 import tensorflow as tf
 from environment import *
+from utils import *
 
 
 def residual_block(name, inputs, num_filters, kernel_size):
@@ -41,6 +42,17 @@ def scalar_head(name, inputs, num_outputs, num_filters, kernel_size, hidden_size
     return x
 
 
+def categorical_scalar_head(name, inputs, num_outputs, scalar_support_size, num_filters, kernel_size, hidden_size):
+    x = tf.keras.layers.Conv2D(num_filters, kernel_size, padding='same', name=name + '_conv')(inputs)
+    x = tf.keras.layers.BatchNormalization(name=name + '_norm')(x)
+    x = tf.keras.layers.Activation('relu', name=name + '_relu')(x)
+    x = tf.keras.layers.Flatten(name=name + '_flatten')(x)
+    x = tf.keras.layers.Dense(num_outputs * hidden_size, activation='relu', name=name + '_hidden')(x)
+    x = tf.keras.layers.Reshape(name=name + '_reshape', target_shape=(num_outputs, hidden_size))(x)
+    x = tf.keras.layers.Dense(scalar_support_size+1, activation='softmax', name=name + '_output')(x)
+    return x
+
+
 def hidden_state_normalization(tensor):
     a = tf.math.reduce_min(tensor, axis=(1, 2, 3), keepdims=True)
     b = tf.math.reduce_max(tensor, axis=(1, 2, 3), keepdims=True)
@@ -48,9 +60,9 @@ def hidden_state_normalization(tensor):
 
 
 def prediction_network(name, input_shape, num_logits, num_players,
-                       tower_height=19, conv_filters=256, conv_kernel_size=(3, 3),
-                       policy_filters=2, policy_kernel_size=(1, 1),
-                       value_filters=1, value_kernel_size=(1, 1), value_hidden_size=256):
+                       tower_height, conv_filters, conv_kernel_size,
+                       policy_filters, policy_kernel_size,
+                       value_filters, value_kernel_size, value_hidden_size):
     inputs = tf.keras.Input(shape=input_shape, name=name + '_input_hidden_state')
     residual_output = residual_tower(name=name + '_tower', inputs=inputs,
                                      height=tower_height, num_filters=conv_filters, kernel_size=conv_kernel_size)
@@ -61,10 +73,32 @@ def prediction_network(name, input_shape, num_logits, num_players,
     return tf.keras.Model(inputs=inputs, outputs=[policy_output, value_output], name=name)
 
 
+def categorical_prediction_network(
+        name, input_shape,
+        tower_height, conv_filters, conv_kernel_size,
+        num_logits, policy_filters, policy_kernel_size,
+        num_players, scalar_support_size, value_filters, value_kernel_size, value_hidden_size):
+
+    inputs = tf.keras.Input(shape=input_shape, name=name + '_input_hidden_state')
+
+    residual_output = residual_tower(name=name + '_tower', inputs=inputs,
+                                     height=tower_height, num_filters=conv_filters, kernel_size=conv_kernel_size)
+    hidden_state = tf.keras.layers.Lambda(hidden_state_normalization, name=name + '_hidden_state_norm')(residual_output)
+
+    policy_output = logits_head(name=name + '_policy', inputs=hidden_state,
+                                num_logits=num_logits, num_filters=policy_filters, kernel_size=policy_kernel_size)
+
+    value_output = categorical_scalar_head(name=name + '_value', inputs=hidden_state,
+                                           num_outputs=num_players, scalar_support_size=scalar_support_size,
+                                           num_filters=value_filters, kernel_size=value_kernel_size, hidden_size=value_hidden_size)
+
+    return tf.keras.Model(inputs=inputs, outputs=[policy_output, value_output], name=name)
+
+
 def dynamics_network(name, input_shape, num_players,
-                     tower_height=19, conv_filters=256, conv_kernel_size=(3, 3),
-                     reward_filters=1, reward_kernel_size=(1, 1), reward_hidden_size=256,
-                     toplay_filters=1, toplay_kernel_size=(1, 1)
+                     tower_height, conv_filters, conv_kernel_size,
+                     reward_filters, reward_kernel_size, reward_hidden_size,
+                     toplay_filters, toplay_kernel_size
                      ):
 
     inputs = tf.keras.Input(shape=input_shape, name=name + '_input_hidden_state')
@@ -82,7 +116,29 @@ def dynamics_network(name, input_shape, num_players,
     return tf.keras.Model(inputs=inputs, outputs=[hidden_state, reward_output, toplay_logits], name=name)
 
 
-def representation_network(name, input_shape, conv_filters=256, conv_kernel_size=(3, 3), tower_height=19):
+def categorical_dynamics_network(name, input_shape, num_players,
+                                 tower_height, conv_filters, conv_kernel_size,
+                                 scalar_support_size, reward_filters, reward_kernel_size, reward_hidden_size,
+                                 toplay_filters, toplay_kernel_size
+                                 ):
+
+    inputs = tf.keras.Input(shape=input_shape, name=name + '_input_hidden_state')
+
+    residual_output = residual_tower(name=name + '_tower', inputs=inputs,
+                                     height=tower_height, num_filters=conv_filters, kernel_size=conv_kernel_size)
+    hidden_state = tf.keras.layers.Lambda(hidden_state_normalization, name=name + '_hidden_state_norm')(residual_output)
+
+    reward_output = categorical_scalar_head(name=name + '_reward', inputs=hidden_state, num_outputs=num_players,
+                                            scalar_support_size=scalar_support_size, num_filters=reward_filters,
+                                            kernel_size=reward_kernel_size, hidden_size=reward_hidden_size)
+
+    toplay_logits = logits_head(name=name + '_toplay', inputs=hidden_state, num_logits=num_players,
+                                num_filters=toplay_filters, kernel_size=toplay_kernel_size)
+
+    return tf.keras.Model(inputs=inputs, outputs=[hidden_state, reward_output, toplay_logits], name=name)
+
+
+def representation_network(name, input_shape, conv_filters, conv_kernel_size, tower_height):
     inputs = tf.keras.Input(shape=input_shape, name=name + '_input_image')
     residual_output = residual_tower(name=name + '_tower', inputs=inputs,
                                      height=tower_height, num_filters=conv_filters, kernel_size=conv_kernel_size)
@@ -91,20 +147,21 @@ def representation_network(name, input_shape, conv_filters=256, conv_kernel_size
 
 
 class NetworkOutput(object):
-    def __init__(self, value, reward, policy_logits, hidden_state, to_play):
+    def __init__(self, value, reward, policy_logits, hidden_state, to_play, inv_scalar_transformation=lambda x: x):
         self.value = value
         self.reward = reward
         self.policy_logits = policy_logits
         self.hidden_state = hidden_state
         self.to_play = to_play
+        self.inv_scalar_transformation = inv_scalar_transformation
 
     def split_batch(self):
         return [NetworkOutput(
-                              {Player(i): value for i, value in enumerate(values)},
-                              {Player(i): reward for i, reward in enumerate(rewards)},
+                              {Player(i): self.inv_scalar_transformation(value) for i, value in enumerate(values)},
+                              {Player(i): self.inv_scalar_transformation(reward) for i, reward in enumerate(rewards)},
                               {Action(i): logit for i, logit in enumerate(policy_logits)},
                               hidden_state,
-                              to_play
+                              Player(tf.math.argmax(to_play))
                               )
                 for values, rewards, policy_logits, hidden_state, to_play in
                 zip(self.value, self.reward, self.policy_logits, self.hidden_state, self.to_play)

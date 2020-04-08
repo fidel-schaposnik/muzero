@@ -25,6 +25,9 @@ class ReplayBuffer:
     def save_game(self, game):
         self.save_history(game.history)
 
+    def num_unique(self):
+        return len(set(self.buffer))
+
     def sample_batch(self, num_unroll_steps, td_steps, discount):
         games = [self.sample_game() for _ in range(self.batch_size)]
         game_pos = [(g, self.sample_position(g)) for g in games]
@@ -69,26 +72,25 @@ class MuZeroServer:
 
         # Shared storage
         self.shared_storage_dir = os.path.join(self.server_dir, 'shared_storage')
-        if not os.path.exists(self.shared_storage_dir):
-            os.makedirs(self.shared_storage_dir)
+        os.makedirs(self.shared_storage_dir, exist_ok=True)
 
-        self.network_names = {'representation', 'dynamics', 'prediction'}
-        config.make_uniform_network().save_weights(self.network_filepath_prefix(0))
-        self.networks = {0: self.network_names}
+        self.network_names = ['representation', 'dynamics', 'prediction']
+        self.network = config.make_uniform_network()
+        self.network.save_weights(self.network_filepath_prefix(0))
+        self.networks = {0}
 
         # Replay buffer
         self.replay_buffer = ReplayBuffer(config)
 
         self.replay_buffer_dir = os.path.join(self.server_dir, 'replay_buffer')
-        if not os.path.exists(self.replay_buffer_dir):
-            os.makedirs(self.replay_buffer_dir)
+        os.makedirs(self.replay_buffer_dir, exist_ok=True)
 
-        self.to_backup = 0
-        self.num_backups = 0
+        self.total_games = 0
         self.num_batches = 0
+        self.num_unique = 0
 
     def latest_step(self):
-        return max(step for step, nameset in self.networks.items() if nameset == self.network_names)
+        return max(self.networks)
 
     def network_filepath_prefix(self, step):
         return os.path.join(self.shared_storage_dir, '{}_it{}'.format(self.name, step))
@@ -102,41 +104,49 @@ class MuZeroServer:
 
         return self.network_filepath(self.latest_step(), network_name)
 
-    def information(self):
-        return json.dumps({'latest_step': self.latest_step(),
-                           'num_games': len(self.replay_buffer.buffer),
-                           'num_positions': self.replay_buffer.num_positions,
-                           'num_backups': self.num_backups,
-                           'num_batches': self.num_batches
-                           })
+    def stats(self):
+        return {'latest_step': self.latest_step(),
+         'num_games': len(self.replay_buffer.buffer),
+         'num_positions': self.replay_buffer.num_positions,
+         'num_unique': self.num_unique,
+         'total_games': self.total_games,
+         'num_backups': self.total_games // self.replay_buffer.window_size,
+         'num_batches': self.num_batches}
 
-    def save_network(self, step, network_name, payload):
-        if network_name not in self.network_names:
-            return 'Invalid network requested!'
+    def summary(self):
+        with open('index.html', 'r') as template_file:
+            template = template_file.read()
+        for key, value in self.stats().items():
+            template = template.replace(key, str(value))
+        return template
 
-        weights_file = open(self.network_filepath(step, network_name), 'wb')
-        weights_file.write(payload)
-        weights_file.close()
-
-        self.networks.setdefault(step, set()).add(network_name)
-        return 'Successfully received {} network at step {}!'.format(network_name, step)
+    def save_network(self, step, weight_files):
+        try:
+            for network_name in self.network_names:
+                weight_files[network_name].save(self.network_filepath(step, network_name))
+            self.network.load_weights(self.network_filepath_prefix(step))
+        except:
+            return 'Could not receive networks!'
+        else:
+            self.networks.add(step)
+            return 'Successfully received networks at step {}!'.format(step)
 
     def backup_filepath(self):
-        return os.path.join(self.replay_buffer_dir, '{}_game_histories_{}.pickle'.format(self.replay_buffer.window_size, self.num_backups))
+        num_backups = self.total_games//self.replay_buffer.window_size
+        filename = '{}_game_histories_{}.pickle'.format(self.replay_buffer.window_size, num_backups)
+        return os.path.join(self.replay_buffer_dir, filename)
 
     def backup_histories(self):
-        backup_file = open(self.backup_filepath(), 'wb')
-        pickle.dump(self.replay_buffer.buffer, backup_file)
-        backup_file.close()
-        self.to_backup = 0
-        self.num_backups += 1
+        with open(self.backup_filepath(), 'wb') as backup_file:
+            pickle.dump(self.replay_buffer.buffer, backup_file)
 
     def save_game_histories(self, histories):
         for history in histories:
             self.replay_buffer.save_history(history)
-            self.to_backup += 1
-            if self.to_backup == self.replay_buffer.window_size:
+            self.total_games += 1
+            if self.total_games % self.replay_buffer.window_size == 0:
                 self.backup_histories()
+        self.num_unique = self.replay_buffer.num_unique()
         return 'Successfully saved {} games!'.format(len(histories))
 
     def sample_batch(self):
@@ -149,9 +159,12 @@ class MuZeroClient:
         self.name = config.name
         self.make_uniform_network = config.make_uniform_network
         self.server_address = server_address
-        self.network_names = {'representation', 'dynamics', 'prediction'}
+        self.network_names = ['representation', 'dynamics', 'prediction']
         self.network_step = -1
         self.network = None
+
+    def stats(self):
+        return json.loads(requests.get(self.server_address + 'json').text)
 
     def network_filepath_prefix(self, step):
         return os.path.join(tempfile.gettempdir(), '{}_it{}'.format(self.name, step))
@@ -160,32 +173,39 @@ class MuZeroClient:
         return '{}_{}.h5'.format(self.network_filepath_prefix(step), network_name[:3])
 
     def latest_network(self):
-        server_information = json.loads(requests.get(self.server_address).text)
+        server_stats = self.stats()
 
-        if self.network_step < server_information['latest_step']:
-            self.network_step = server_information['latest_step']
+        if self.network_step < server_stats['latest_step']:
+            self.network_step = server_stats['latest_step']
             for network_name in self.network_names:
                 response = requests.get(self.server_address + 'storage/'+network_name)
-                tmp_file = open(self.network_filepath(self.network_step, network_name), 'wb')
-                tmp_file.write(response.content)
-                tmp_file.close()
+                with open(self.network_filepath(self.network_step, network_name), 'wb') as tmp_file:
+                    tmp_file.write(response.content)
+
             self.network = self.make_uniform_network()
             self.network.load_weights(self.network_filepath_prefix(self.network_step))
             self.network.steps = self.network_step
+
+            for network_name in self.network_names:
+                os.remove(self.network_filepath(self.network_step, network_name))
         return self.network
 
     def save_network(self, network):
-        network.save_weights(self.network_filepath_prefix(network.training_steps()))
+        step = network.training_steps()
+        network.save_weights(self.network_filepath_prefix(step))
+        weight_files = {}
         for network_name in self.network_names:
-            tmp_file = open(self.network_filepath(network.training_steps(), network_name), 'rb')
-            payload = tmp_file.read()
-            tmp_file.close()
-            response = requests.post(self.server_address + 'storage/'+network_name, params={'step': network.training_steps()}, data=payload)
-            print(response.text)
+            filepath = self.network_filepath(step, network_name)
+            with open(filepath, 'rb') as file :
+                weight_files[network_name] = file.read()
+            os.remove(filepath)
+
+        response = requests.post(self.server_address+'storage', data={'step': step}, files=weight_files)
+        print(response.text)
 
     def save_game_histories(self, histories):
         payload = pickle.dumps(histories)
-        response = requests.post(self.server_address + 'replay_buffer', data=payload)
+        response = requests.post(self.server_address + 'replay_buffer', files={'histories': payload})
         print(response.text)
 
     def sample_batch(self):
@@ -216,20 +236,25 @@ def start_server(config, data_path):
     api = Flask(__name__)
 
     @api.route('/', methods=['GET'])
-    def server_information():
-        return server.information()
+    def server_summary():
+        return server.summary()
 
-    @api.route('/storage/<network_name>', methods=['GET', 'POST'])
-    def storage(network_name):
-        if request.method == 'GET':
-            response = server.latest_network_filepath(network_name)
-            if os.path.exists(response):
-                return send_file(response, attachment_filename=os.path.basename(response))
-            else:
-                return response
+    @api.route('/json', methods=['GET'])
+    def server_stats():
+        return json.dumps(server.stats())
+
+    @api.route('/storage', methods=['POST'])
+    def save_network():
+        step = int(request.form.get('step'))
+        return server.save_network(step=step, weight_files=request.files)
+
+    @api.route('/storage/<network_name>', methods=['GET'])
+    def latest_network(network_name):
+        response = server.latest_network_filepath(network_name)
+        if os.path.exists(response):
+            return send_file(response, attachment_filename=os.path.basename(response))
         else:
-            step = int(request.args.get('step'))
-            return server.save_network(step, network_name, request.data)
+            return response
 
     @api.route('/replay_buffer', methods=['GET', 'POST'])
     def save_game_histories():
@@ -237,7 +262,7 @@ def start_server(config, data_path):
             payload = pickle.dumps(server.sample_batch())
             return payload
         else:
-            game_histories = pickle.loads(request.data)
+            game_histories = pickle.load(request.files['histories'])
             return server.save_game_histories(game_histories)
 
     api.run()

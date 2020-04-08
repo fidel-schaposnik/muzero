@@ -1,6 +1,6 @@
 class ImplementationError(Exception):
     """
-    Exception for un-implemented
+    Exception for un-implemented methods in base classes.
     """
 
     def __init__(self, function_name, class_name):

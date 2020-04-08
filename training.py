@@ -15,7 +15,7 @@ def tensorboard_summary(model, line_length=100):
     return result
 
 
-def loss_logger(summary_writer, metrics, step):
+def loss_logger(summary_writer, step, metrics):
     print(('{},' + ','.join('{:.4f}' for _ in range(len(metrics) + 1))).format(step, *[metric.result() for metric in metrics], sum(metric.result() for metric in metrics)))
     if summary_writer:
         with summary_writer.as_default():
@@ -24,11 +24,19 @@ def loss_logger(summary_writer, metrics, step):
                 tf.summary.scalar(name=metric.name, data=metric.result(), step=step)
 
 
-def evaluation_logger(summary_writer, evaluation_stats, step):
+def evaluation_logger(summary_writer, step, evaluation_stats):
     if summary_writer:
         with summary_writer.as_default():
             for player, result in evaluation_stats.items():
                 tf.summary.scalar(name='Evaluation/{}'.format(player), data=result, step=step)
+
+
+def self_play_logger(summary_writer, step, num_games, num_positions, num_unique):
+    if summary_writer:
+        with summary_writer.as_default():
+            tf.summary.scalar(name='Self-play/Number of games', data=num_games, step=step)
+            tf.summary.scalar(name='Self-play/Number of positions', data=num_positions, step=step)
+            tf.summary.scalar(name='Self-play/Number of unique games', data=num_unique, step=step)
 
 
 def tensorboard_logger(config, checkpoint_path, network):
@@ -60,7 +68,7 @@ def tensorboard_logger(config, checkpoint_path, network):
     return checkpoint_dir, summary_writer
 
 
-def synchroneous_train_network(config, network, num_games, num_steps, num_eval_games, checkpoint_path=None):
+def synchronous_train_network(config, network, num_games, num_steps, num_eval_games, checkpoint_path=None):
     replay_buffer = ReplayBuffer(config)
     optimizer = tf.keras.optimizers.Adam(lr=config.learning_rate)
 
@@ -71,12 +79,10 @@ def synchroneous_train_network(config, network, num_games, num_steps, num_eval_g
     for step in range(config.training_steps):
         if step % num_steps == 0:
             batch_selfplay(config, replay_buffer, network, num_games)
-
-            # Self-play logging
-            if summary_writer:
-                with summary_writer.as_default():
-                    tf.summary.scalar(name='Self-play/Number of games', data=len(replay_buffer.buffer), step=step)
-                    tf.summary.scalar(name='Self-play/Number of positions', data=replay_buffer.num_positions, step=step)
+            self_play_logger(summary_writer, step=step,
+                             num_games=len(replay_buffer.buffer),
+                             num_positions=replay_buffer.num_positions,
+                             num_unique=replay_buffer.num_unique())
 
         if step % config.checkpoint_interval == 0:
             if checkpoint_dir:
@@ -84,7 +90,7 @@ def synchroneous_train_network(config, network, num_games, num_steps, num_eval_g
 
             if num_eval_games:
                 evaluation_stats = evaluate_agent(config, network, num_eval_games)
-                evaluation_logger(summary_writer, evaluation_stats, step)
+                evaluation_logger(summary_writer, step=step, evaluation_stats=evaluation_stats)
 
             # learning_rate = config.lr_init*config.lr_decay_rate ** (network.training_steps() / config.lr_decay_steps)
             #      optimizer = tf.keras.optimizers.SGD(lr=learning_rate, momentum=config.momentum)
@@ -96,7 +102,7 @@ def synchroneous_train_network(config, network, num_games, num_steps, num_eval_g
 
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps, config.discount)
         metrics = batch_update_weights(config, network, optimizer, batch)
-        loss_logger(summary_writer, metrics, step)
+        loss_logger(summary_writer, step=step, metrics=metrics)
 
     if checkpoint_dir:
         network.save_weights(os.path.join(checkpoint_dir, '{}_it{}'.format(config.name, config.training_steps)))
@@ -117,11 +123,17 @@ def train_network(config, server_address, num_eval_games, tensorboard_logpath=No
 
             if num_eval_games:
                 evaluation_stats = evaluate_agent(config, network, num_eval_games)
-                evaluation_logger(summary_writer, evaluation_stats, step)
+                evaluation_logger(summary_writer, step=step, evaluation_stats=evaluation_stats)
+
+        server_information = client.information()
+        self_play_logger(summary_writer, step=step,
+                         num_games=server_information['num_games'],
+                         num_positions=server_information['num_positions'],
+                         num_unique=server_information['num_unique'])
 
         batch = client.sample_batch()
         metrics = batch_update_weights(config, network, optimizer, batch)
-        loss_logger(summary_writer, metrics, step)
+        loss_logger(summary_writer, step=step, metrics=metrics)
     client.save_network(network)
 
 

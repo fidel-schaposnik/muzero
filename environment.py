@@ -48,11 +48,15 @@ class Environment:
     A class for environments with which MuZero interacts.
     """
 
+    def __init__(self, action_space_size, num_players):
+        self.action_space_size = action_space_size
+        self.num_players = num_players
+
     def players(self):
         """
         Returns a list of all Player's acting in the environment.
         """
-        raise ImplementationError('players', 'Environment')
+        return [Player(player_id) for player_id in range(self.num_players)]
 
     def to_play(self):
         """
@@ -60,11 +64,17 @@ class Environment:
         """
         raise ImplementationError('to_play', 'Environment')
 
+    def is_legal_action(self, action):
+        """
+        Returns True if the action is legal in the current state, False otherwise.
+        """
+        raise ImplementationError('is_legal_action', 'Environment')
+
     def legal_actions(self):
         """
         Returns a list of all Action's that can be performed in the current state.
         """
-        raise ImplementationError('legal_actions', 'Environment')
+        return [action for action in map(Action, range(self.action_space_size)) if self.is_legal_action(action)]
 
     def terminal(self):
         """

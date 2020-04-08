@@ -4,18 +4,18 @@ from config import *
 import tensorflow as tf
 
 
-def make_tictactoe_config(window_size=int(1e3), batch_size=2048,
-                          training_steps=int(1e4), checkpoint_interval=int(1e3), num_simulations=25,
-                          conv_filters=32, conv_kernel_size=(3, 3), tower_height=4,  # Residual tower parameters
-                          policy_filters=64, policy_kernel_size=(3, 3),  # Policy sub-network parameters
-                          value_filters=64, value_kernel_size=(3, 3),  # Value sub-network parameters
-                          reward_filters=64, reward_kernel_size=(3, 3),  # Reward sub-network parameters
-                          toplay_filters=64, toplay_kernel_size=(3, 3),  # To-play sub-network parameters
-                          hidden_size=128  # Parameters shared by value and reward sub-networks
-                          ):
+def make_config(window_size=int(1e3), batch_size=2048,
+                training_steps=int(1e4), checkpoint_interval=int(1e2), num_simulations=27,
+                conv_filters=32, conv_kernel_size=(3, 3), tower_height=4,  # Residual tower parameters
+                policy_filters=64, policy_kernel_size=(3, 3),  # Policy sub-network parameters
+                value_filters=64, value_kernel_size=(3, 3),  # Value sub-network parameters
+                reward_filters=64, reward_kernel_size=(3, 3),  # Reward sub-network parameters
+                toplay_filters=64, toplay_kernel_size=(3, 3),  # To-play sub-network parameters
+                hidden_size=128  # Parameters shared by value and reward sub-networks
+                ):
+
     return MuZeroConfig(name='TicTacToe',
-                        reward_loss_func=tf.keras.losses.mean_squared_error,
-                        value_loss_func=tf.keras.losses.mean_squared_error,
+                        scalar_support_size=None,
                         weight_decay=1e-4,
                         window_size=window_size,
                         batch_size=batch_size,
@@ -25,8 +25,9 @@ def make_tictactoe_config(window_size=int(1e3), batch_size=2048,
                         checkpoint_interval=checkpoint_interval,
                         learning_rate=.001,
                         num_simulations=num_simulations,
+                        known_bounds=(0, 1),
                         discount=1,
-                        freezing_moves=6,
+                        freezing_moves=10,
                         root_dirichlet_alpha=0.25,
                         root_exploration_noise=0.1,
                         max_moves=9,
@@ -51,10 +52,7 @@ class TicTacToeEnvironment(Environment):
         """
         Create the environment where tic-tac-toe is played, initialize to an empty board.
         """
-
-        # Game parameters
-        self.action_space_size = 9
-        self.num_players = 2
+        super().__init__(action_space_size=9, num_players=2)
 
         # Game state (board[i,j] == -1 if cell is empty, player_id if cell is filled)
         self.board = -np.ones(shape=(3, 3), dtype=np.int)
@@ -66,12 +64,6 @@ class TicTacToeEnvironment(Environment):
         row = action.index // 3
         col = action.index % 3
         return self.board[row, col] == -1
-
-    def legal_actions(self):
-        return [action for action in map(Action, range(self.action_space_size)) if self.is_legal_action(action)]
-
-    def players(self):
-        return [Player(i) for i in range(self.num_players)]
 
     def to_play(self):
         return Player(self.steps % 2)
@@ -87,7 +79,7 @@ class TicTacToeEnvironment(Environment):
         else:
             return {player: 0.5 for player in self.players()}
 
-    def step(self, action: Action):
+    def step(self, action):
         assert not self.ended and self.is_legal_action(action)
 
         # Find the position of this move
@@ -132,11 +124,8 @@ class TicTacToeEnvironment(Environment):
 
 class TicTacToeGame(Game):
     def __init__(self, **game_params):
-        super().__init__()
-        self.environment = TicTacToeEnvironment(**game_params)
-        self.history = GameHistory(initial_state=self.make_image(),
-                                   action_space_size=self.environment.action_space_size,
-                                   num_players=self.environment.num_players)
+        super().__init__(environment=TicTacToeEnvironment(**game_params))
+        self.history.observations.append(self.make_image())
 
     def make_image(self):
         return np.transpose(np.array(self.environment.get_state()), (1, 2, 0)).astype(np.float32)
@@ -148,11 +137,12 @@ class TicTacToeNetwork(Network):
     """
 
     def __init__(self,
-                 conv_filters=3, conv_kernel_size=(3, 3), tower_height=3,  # Residual tower parameters
-                 policy_filters=2, policy_kernel_size=(1, 1),  # Policy sub-network parameters
-                 value_filters=1, value_kernel_size=(1, 1),  # Value sub-network parameters
-                 reward_filters=1, reward_kernel_size=(1, 1),  # Reward sub-network parameters
-                 hidden_size=64,  # For value and reward sub-networks
+                 conv_filters, conv_kernel_size, tower_height,  # Residual tower parameters
+                 policy_filters, policy_kernel_size,  # Policy head parameters
+                 value_filters, value_kernel_size,  # Value head parameters
+                 reward_filters, reward_kernel_size,  # Reward head parameters
+                 toplay_filters, toplay_kernel_size,  # To-play head parameters
+                 hidden_size,  # For value and reward heads
                  **kwargs  # Collects other parameters not used here (mostly for game definition)
                  ):
         """
@@ -174,7 +164,8 @@ class TicTacToeNetwork(Network):
 
         self.dynamics = dynamics_network(name='TTTDyn', input_shape=(3, 3, conv_filters + 9), num_players=2,
                                          tower_height=tower_height, conv_filters=conv_filters, conv_kernel_size=conv_kernel_size,
-                                         reward_filters=reward_filters, reward_kernel_size=reward_kernel_size, reward_hidden_size=hidden_size)
+                                         reward_filters=reward_filters, reward_kernel_size=reward_kernel_size, reward_hidden_size=hidden_size,
+                                         toplay_filters=toplay_filters, toplay_kernel_size=toplay_kernel_size)
 
         self.prediction = prediction_network(input_shape=(3, 3, conv_filters), name='TTTPre', num_logits=9, num_players=2,
                                              tower_height=tower_height, conv_filters=conv_filters, conv_kernel_size=conv_kernel_size,
@@ -200,9 +191,11 @@ class TicTacToeNetwork(Network):
 
     def initial_inference(self, batch_image):
         """
-        Takes a batch of images from Game.make_image, which has shape (batch_size, 3, 3, 2).
-        Applies the representation network and performs a prediction.
-        Returns a list of batch_size predictions packaged as a NetworkOutput object.
+        Observation batch:      (batch_size, 3, 3, num_players=2).
+        Representation output:  (batch_size, 3, 3, conv_filters)
+        Prediction outputs:
+            - batch_policy_logits:  (batch_size, action_space_size=9)
+            - batch_value:          (batch_size, num_players=2)
         """
 
         start = time.time()
@@ -215,14 +208,25 @@ class TicTacToeNetwork(Network):
         end = time.time()
         self.PREDICTION_TIME += end - start
 
-        return NetworkOutput(batch_value, tf.zeros_like(batch_value), batch_policy_logits, batch_hidden_state, tf.zeros(self.toplay_shape(len(batch_image))))
+        return NetworkOutput(value=batch_value,
+                             reward=tf.zeros_like(batch_value),
+                             policy_logits=batch_policy_logits,
+                             hidden_state=batch_hidden_state,
+                             to_play=tf.zeros(self.toplay_shape(len(batch_image))))
 
     def recurrent_inference(self, batch_hidden_state, batch_action):
         """
-        Takes a batch of hidden states (from representation or dynamics networks), which has shape (batch_size, 3, 3, conv_filters).
-        Takes a batch of actions and encodes it as an array of shape (batch_size, 3, 3, action_space_size=9).
-        Applies the dynamics network to the concatenation of both arrays above and performs a prediction.
-        Returns a list of batch_size predictions of the form (value, reward, policy, hidden_state).
+        Hidden state batch shape:   (batch_size, 3, 3, conv_filters)
+        Encoded action batch shape: (batch_size, 3, 3, action_space_size=9)
+        Dynamics input:             (batch_size, 3, 3, conv_filters+9)
+        Dynamics outputs:
+            - batch_hidden_state:   (batch_size, 3, 3, conv_filters)
+            - batch_reward:         (batch_size, num_players=1)
+            - batch_toplay:         (batch_size, num_players=1)
+        Prediction input:           (batch_size, 3, 3, conv_filters)
+        Prediction outputs:
+            - batch_policy_logits:  (batch_size, action_space_size=9)
+            - batch_value:          (batch_size, num_players=2)
         """
 
         start = time.time()
