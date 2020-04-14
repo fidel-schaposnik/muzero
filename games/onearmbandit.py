@@ -5,14 +5,14 @@ from utils import *
 
 
 def make_config(x=None, z=0.5, t=20, scalar_support_size=100,
-                window_size=int(1e3), batch_size=2048, td_steps=100, discount=0.9, max_moves=100,
-                training_steps=int(1e4), checkpoint_interval=int(1e3), num_simulations=16,
-                conv_filters=32, conv_kernel_size=(3, 3), tower_height=4,  # Residual tower parameters
-                policy_filters=32, policy_kernel_size=(3, 3),  # Policy sub-network parameters
-                value_filters=32, value_kernel_size=(3, 3),  # Value sub-network parameters
-                reward_filters=32, reward_kernel_size=(3, 3),  # Reward sub-network parameters
+                window_size=int(1e3), batch_size=256, td_steps=100, discount=0.9, max_moves=100,
+                training_steps=int(1e4), checkpoint_interval=int(1e0), num_simulations=16,
+                conv_filters=4, conv_kernel_size=(3, 3), tower_height=4,  # Residual tower parameters
+                policy_filters=4, policy_kernel_size=(3, 3),  # Policy sub-network parameters
+                value_filters=4, value_kernel_size=(3, 3),  # Value sub-network parameters
+                reward_filters=4, reward_kernel_size=(3, 3),  # Reward sub-network parameters
                 toplay_filters=1, toplay_kernel_size=(1, 1),  # To-play sub-network parameters
-                hidden_size=32  # Parameters shared by value and reward sub-networks
+                hidden_size=4  # Parameters shared by value and reward sub-networks
                 ):
 
     return MuZeroConfig(name='OneArmBandit',
@@ -58,6 +58,11 @@ class OneArmBanditEnvironment(Environment):
         """
         super().__init__(action_space_size=2, num_players=1)
 
+        self.REPRESENTATION_TIME = 0.
+        self.PREDICTION_TIME = 0.
+        self.DYNAMICS_TIME = 0.
+        self.RECINF_PREP_TIME = 0.
+
         # Game parameters
         self.X = random.random() if not x else x
         self.Z = z
@@ -78,7 +83,7 @@ class OneArmBanditEnvironment(Environment):
         return self.ended
 
     def outcome(self):
-        return sum(self.rewards)
+        return {Player(0): sum(self.rewards)}
 
     def step(self, action):
         assert not self.ended and self.is_legal_action(action)
@@ -100,7 +105,7 @@ class OneArmBanditEnvironment(Environment):
         return self.rewards
 
     def print_state(self):
-        print('Total reward handed out so far: {:.2f}'.format(self.outcome()))
+        print('Total reward handed out so far: {:.2f}'.format(sum(self.rewards)))
 
 
 class OneArmBanditGame(Game):
@@ -131,7 +136,25 @@ class OneArmBanditNetwork(Network):
                  **kwargs  # Collects other parameters not used here (mostly for game definition)
                  ):
         """
-        Create residual networks for representation, dynamics and prediction functions
+        Initial inference:
+            Observation batch:          (batch_size, t, scalar_support_size+1, 1).
+            Representation output:      (batch_size, t, scalar_support_size+1, conv_filters)
+            Prediction outputs:
+                - batch_policy_logits:  (batch_size, action_space_size=2)
+                - batch_value:          (batch_size, num_players=1)
+
+        Recurrent inference:
+            Hidden state batch shape:   (batch_size, t, scalar_support_size+1, conv_filters)
+            Encoded action batch shape: (batch_size, t, scalar_support_size+1, action_space_size=2)
+            Dynamics input:             (batch_size, t, scalar_support_size+1, conv_filters+2)
+            Dynamics outputs:
+                - batch_hidden_state:   (batch_size, t, scalar_support_size+1, conv_filters)
+                - batch_reward:         (batch_size, num_players=1)
+                - batch_toplay:         (batch_size, num_players=1)
+            Prediction input:           (batch_size, t, scalar_support_size+1, conv_filters)
+            Prediction outputs:
+                - batch_policy_logits:  (batch_size, action_space_size=2)
+                - batch_value:          (batch_size, num_players=1)
         """
 
         super().__init__()
@@ -168,61 +191,15 @@ class OneArmBanditNetwork(Network):
         input_shape[0] = batch_size
         return tuple(input_shape)
 
-    def toplay_shape(self, batch_size):
+    def toplay_shape(self, batch_size=None):
         output_shape = list(self.dynamics.output_shape[-1])
         output_shape[0] = batch_size
         return tuple(output_shape)
 
-    def initial_inference(self, batch_image):
-        """
-        Observation batch:      (batch_size, t, scalar_support_size+1, 1).
-        Representation output:  (batch_size, t, scalar_support_size+1, conv_filters)
-        Prediction outputs:
-            - batch_policy_logits:  (batch_size, action_space_size=2)
-            - batch_value:          (batch_size, num_players=1)
-        """
-
-        batch_hidden_state = self.representation(batch_image)
-
-        batch_policy_logits, batch_value = self.prediction(batch_hidden_state)
-
-        return NetworkOutput(value=batch_value,
-                             reward=tf.zeros_like(batch_value),
-                             policy_logits=batch_policy_logits,
-                             hidden_state=batch_hidden_state,
-                             to_play=tf.zeros(self.toplay_shape(len(batch_image))),
-                             inv_scalar_transformation=self.inv_scalar_transformation
-                             )
-
-    def recurrent_inference(self, batch_hidden_state, batch_action):
-        """
-        Hidden state batch shape:   (batch_size, t, scalar_support_size+1, conv_filters)
-        Encoded action batch shape: (batch_size, t, scalar_support_size+1, action_space_size=2)
-        Dynamics input:             (batch_size, t, scalar_support_size+1, conv_filters+2)
-        Dynamics outputs:
-            - batch_hidden_state:   (batch_size, t, scalar_support_size+1, conv_filters)
-            - batch_reward:         (batch_size, num_players=1)
-            - batch_toplay:         (batch_size, num_players=1)
-        Prediction input:           (batch_size, t, scalar_support_size+1, conv_filters)
-        Prediction outputs:
-            - batch_policy_logits:  (batch_size, action_space_size=2)
-            - batch_value:          (batch_size, num_players=1)
-        """
-
+    def state_action_encoding(self, batch_hidden_state, batch_action):
         # Encode action as binary planes
         batch_encoded_action = self.encoded_action_space[[action.index for action in batch_action]]
 
         # Concatenate action to hidden state
         batch_dynamics_input = np.concatenate([batch_hidden_state, batch_encoded_action], axis=-1)
-
-        # Apply the dynamics + prediction networks
-        batch_hidden_state, batch_reward, batch_toplay = self.dynamics(batch_dynamics_input)
-
-        batch_policy_logits, batch_value = self.prediction(batch_hidden_state)
-
-        return NetworkOutput(value=batch_value,
-                             reward=batch_reward,
-                             policy_logits=batch_policy_logits,
-                             hidden_state=batch_hidden_state,
-                             to_play=batch_toplay,
-                             inv_scalar_transformation=self.inv_scalar_transformation)
+        return batch_dynamics_input
