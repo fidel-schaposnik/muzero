@@ -3,14 +3,8 @@
 <html>
 
 <head>
-    <title>MuZero server summary</title>
-
-<style>
-table {
-  border: 1px solid black;
-  border-spacing: 7px;
-}
-</style>
+    <title>MuZero server - Summary</title>
+    <link rel="stylesheet" type="text/css" href="css/style.css">
 </head>
 
 <body>
@@ -20,32 +14,40 @@ table {
 
     <table>
         <tr>
-            <td align="right"><b>Latest network at step:</b></td>
+            <th align="right"><b>Number of registered clients:</b></th>
+            <td>num_clients</td>
+        </tr>
+        <tr>
+            <th align="right"><b>Latest network at step:</b></th>
             <td>latest_step</td>
         </tr>
         <tr>
-            <td align="right"><b>Number of games:</b></td>
+            <th align="right"><b>Number of games:</b></th>
             <td>num_games</td>
         </tr>
         <tr>
-            <td align="right"><b>Number of positions:</b></td>
+            <th align="right"><b>Number of positions:</b></th>
             <td>num_positions</td>
         </tr>
         <tr>
-            <td align="right"><b>Number of unique games:</b></td>
+            <th align="right"><b>Number of unique games:</b></th>
             <td>num_unique</td>
         </tr>
         <tr>
-            <td align="right"><b>Total number of games so far:</b></td>
+            <th align="right"><b>Total number of games so far:</b></th>
             <td>total_games</td>
         </tr>
         <tr>
-            <td align="right"><b>Number of game backup files:</b></td>
+            <th align="right"><b>Number of game backup files:</b></th>
             <td>num_backups</td>
         </tr>
         <tr>
-            <td align="right"><b>Number of training batches:</b></td>
+            <th align="right"><b>Number of training batches:</b></th>
             <td>num_batches</td>
+        </tr>
+        <tr>
+            <th align="right"><b>Server uptime:</b></th>
+            <td>total_runtime</td>
         </tr>
     </table>
 
@@ -54,19 +56,19 @@ table {
     <form action="storage" method="post" enctype="multipart/form-data">
         <table>
             <tr>
-                <td align="right"><b>Representation:</b></td>
+                <th align="right">Representation:</th>
                 <td><input type="file" name="representation"></td>
             </tr>
             <tr>
-                <td align="right"><b>Dynamics:</b></td>
+                <th align="right">Dynamics:</th>
                 <td><input type="file" name="dynamics"></td>
             </tr>
             <tr>
-                <td align="right"><b>Prediction:</b></td>
+                <th align="right">Prediction:</th>
                 <td><input type="file" name="prediction"></td>
             </tr>
             <tr>
-                <td align="right"><b>Step:</b></td>
+                <th align="right">Step:</th>
                 <td><input type="number" name="step"></td>
             </tr>
             <tr align="center">
@@ -86,6 +88,23 @@ table {
             </tr>
 		</table>
 	</form>
+	
+<h1>Latest network gameplay</h1>
+
+<form action="play" method="post">
+    <table>
+        <tr>
+            <th>Human player</th>
+        </tr>
+        <tr>
+            <td><input type="radio" name="player" value="-1" checked>None</td>
+        </tr>
+player_radiobuttons
+        <tr>
+            <td align="center"><input type="submit" value="Play!"></td>
+        </tr>
+    </table>
+</form>
 	
 </center>
 

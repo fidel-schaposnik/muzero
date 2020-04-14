@@ -1,0 +1,42 @@
+h1 {
+    font-family: sans-serif;
+}
+
+td, th {
+    border: 1px solid rgb(190, 190, 190);
+    padding: 10px;
+}
+
+td {
+    text-align: center;
+}
+
+th {
+    width: 275px;
+}
+
+tr:nth-child(even) {
+    background-color: #eee;
+}
+
+table {
+    border-collapse: collapse;
+    border: 2px solid #ccc;
+    letter-spacing: 1px;
+    font-family: sans-serif;
+    font-size: .8rem;
+    width: 600px;
+}
+
+input[type=number], input[type=file] {
+    width: 100%;
+}
+
+input[type=submit] {
+    width: 100%;
+    font-family: sans-serif;
+    border: none;
+    padding: 10px;
+    font-weight: bold;
+    background: #aaa
+}
