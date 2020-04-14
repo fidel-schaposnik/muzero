@@ -28,7 +28,7 @@ def evaluation_logger(summary_writer, step, evaluation_stats):
     if summary_writer:
         with summary_writer.as_default():
             for player, result in evaluation_stats.items():
-                tf.summary.scalar(name='Evaluation/{}'.format(player), data=result, step=step)
+                tf.summary.scalar(name='Evaluation/{}'.format(player), data=result/20., step=step)
 
 
 def self_play_logger(summary_writer, step, num_games, num_positions, num_unique):
@@ -89,7 +89,7 @@ def synchronous_train_network(config, network, num_games, num_steps, num_eval_ga
                 network.save_weights(os.path.join(checkpoint_dir, '{}_it{}'.format(config.name, step)))
 
             if num_eval_games:
-                evaluation_stats = evaluate_agent(config, network, num_eval_games)
+                evaluation_stats = evaluate_against_random_agent(config, network, num_eval_games)
                 evaluation_logger(summary_writer, step=step, evaluation_stats=evaluation_stats)
 
             # learning_rate = config.lr_init*config.lr_decay_rate ** (network.training_steps() / config.lr_decay_steps)
@@ -108,8 +108,9 @@ def synchronous_train_network(config, network, num_games, num_steps, num_eval_ga
         network.save_weights(os.path.join(checkpoint_dir, '{}_it{}'.format(config.name, config.training_steps)))
 
 
-def train_network(config, server_address, num_eval_games, tensorboard_logpath=None):
-    client = MuZeroClient(config, server_address)
+def train_network(server_address, num_eval_games, tensorboard_logpath=None):
+    client = MuZeroClient(server_address)
+    config = client.config
     network = client.latest_network()
     optimizer = tf.keras.optimizers.Adam(lr=config.learning_rate)
 
@@ -122,10 +123,10 @@ def train_network(config, server_address, num_eval_games, tensorboard_logpath=No
             client.save_network(network)
 
             if num_eval_games:
-                evaluation_stats = evaluate_agent(config, network, num_eval_games)
+                evaluation_stats = evaluate_against_random_agent(config, network, num_eval_games)
                 evaluation_logger(summary_writer, step=step, evaluation_stats=evaluation_stats)
 
-        server_information = client.information()
+        server_information = client.stats()
         self_play_logger(summary_writer, step=step,
                          num_games=server_information['num_games'],
                          num_positions=server_information['num_positions'],
@@ -168,7 +169,6 @@ def batch_update_weights(config, network, optimizer, batch):
 
         for batch_action in batch_actions.T:
             batch_recurrent_inference = network.recurrent_inference(batch_hidden_state, batch_action)
-
             batch_predictions.append((1./config.num_unroll_steps,
                                       batch_recurrent_inference.value,
                                       batch_recurrent_inference.reward,
@@ -183,7 +183,7 @@ def batch_update_weights(config, network, optimizer, batch):
             gradient_scale, batch_value, batch_reward, batch_policy_logits, batch_toplay, predict_reward = predictions
             batch_target_value, batch_target_reward, batch_target_policy_logits, batch_target_toplay = zip(*targets)
 
-            value_loss = config.value_loss(batch_target_value, batch_value)
+            value_loss = config.value_loss_decay * config.value_loss(batch_target_value, batch_value)
             value_loss_metric(value_loss)
 
             policy_loss = tf.keras.losses.categorical_crossentropy(batch_target_policy_logits, batch_policy_logits, from_logits=True)
@@ -192,17 +192,20 @@ def batch_update_weights(config, network, optimizer, batch):
             loss += tf.math.reduce_mean(scale_gradient(value_loss + policy_loss, gradient_scale))/(config.num_unroll_steps+1)
 
             if predict_reward:
-                reward_loss = config.reward_loss(batch_target_reward, batch_reward)
+                reward_loss = config.reward_loss_decay * config.reward_loss(batch_target_reward, batch_reward)
                 reward_loss_metric(reward_loss)
 
                 toplay_loss = tf.keras.losses.sparse_categorical_crossentropy(batch_target_toplay, batch_toplay, from_logits=True)
                 toplay_loss_metric(toplay_loss)
                 loss += tf.math.reduce_mean(scale_gradient(reward_loss + toplay_loss, gradient_scale))/config.num_unroll_steps
 
-        for weights in network.get_weights():
-            l2_regularization = config.weight_decay * tf.nn.l2_loss(weights)
-            regularization_metric(l2_regularization)
-            loss += l2_regularization
+        # for weights in network.get_weights():
+        #     l2_regularization = config.weight_decay * tf.nn.l2_loss(weights)
+        #     regularization_metric(l2_regularization)
+        #     loss += l2_regularization
+        l2_regularization = config.regularization_decay * sum(tf.nn.l2_loss(weights) for weights in network.get_weights())
+        regularization_metric(l2_regularization)
+        loss += l2_regularization
 
     grads = tape.gradient(loss, network.trainable_variables)
     optimizer.apply_gradients(zip(grads, network.trainable_variables))

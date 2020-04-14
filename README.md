@@ -39,7 +39,7 @@ checkpoint, `NUM_EVAL_GAMES` are played to evaluate the network.
 
 #### Asynchronous mode
 
-In this mode self-playing and training occur simultaneously in different threads or 
+In this mode self-playing and training occur simultaneously in different processes or 
 different nodes of a distributed network. A simple HTTP server maintains a database of 
 self-played games and neural network weights. Self-playing and training agents interact 
 with this server through a simple API.
@@ -49,24 +49,32 @@ with this server through a simple API.
  games are pickled). You can then go to http://localhost:5000/ to see basic server 
  statistics.
 
-- Use `python muzero.py --game GAME --client HOST --self-play NUM_GAMES` to start a self-playing agent
+- Use `python muzero.py --client HOST --self-play NUM_GAMES` to start a self-playing agent
  that uses the latest network from the server `HOST` to generate batches of `NUM_GAMES` 
  games and send them back to the server.
  
-- Use `python muzero.py --game GAME --client HOST --train NUM_EVAL_GAMES` to start a training agent 
+- Use `python muzero.py --client HOST --train NUM_EVAL_GAMES` to start a training agent 
  that queries the server at `HOST` for batches of training data, and uses them to train 
  the latest network. At each checkpoint, `NUM_EVAL_GAMES` are played to evaluate the network.
 
 By default, the server is only visible locally. Change `api.run()` to `api.run(0.0.0.0)` in
 `storage_replay.py` to make the server visible to the outside
 
-**WARNING:** the client-server code is implemented using [Flask](https://flask.palletsprojects.com/), and it is not recommended to deploy it as is 
+**WARNING:** the API is implemented using [Flask](https://flask.palletsprojects.com/), and it is not recommended to deploy it as is 
 for production. 
 
 ## Currently implemented games:
 
-- Tic-tac-toe
-- One-arm bandit
+The following games have already been implemented (though only partial experiments 
+have been carried out with them):
+
+- CartPole-v0 (`games/cartpole.py`)
+- Tic-tac-toe (`games/tictactoe.py`)
+- One-arm bandit (`games/onearmbandit.py`)
+
+You can run MuZero on any of these games by using the `--game` command-line 
+argument with the corresponding filename, e.g. `--game tictactoe`.
+ 
 
 ## Other features
 
@@ -74,7 +82,10 @@ for production.
 
 - **Easily add games**: just add a file to the `games` directory defining MuZero's
 configuration for the game of your choice, and implementing sub-classes for the 
-`Environment`, `Game` and `Network` classes.
+`Environment`, `Game` and `Network` classes. The methods you need to implement 
+for each subclass are marked in `environment.py`, `game.py` and `network.py`, 
+respectively. **NOTE:** It should be trivial to interface with [OpenAI Gym](https://gym.openai.com/)
+environments, see `games/cartpole.py` for an example.
 
 - **Loss selection:** you can choose to use MSE or CCE losses for values and rewards
 (setting `scalar_support_size` in the game configuration transforms scalars to categorical
@@ -82,8 +93,17 @@ representations in a manner similar to that described in [[1]](https://arxiv.org
 
 - **Weight and game buffer loading in asynchronous mode:** you can upload network weights
 and self-played games directly to the server in asynchronous mode in order to resume 
-training from a checkpoint. 
+training from a checkpoint of your choice.
+
+- **Playing against the latest network:** a basic interface is setup through the 
+server to play against the latest network directly on the browser in 
+asynchronous mode.
+
+- **Pre-built networks:** basic residual and fully connected architectures are defined
+in `network.py`, and can be used as is simply defining the network parameters 
+(see examples in `games` directory). 
 
 ## To-do list
 
 - **Prioritized replay**
+- **Optimize hyperparameters for some of the included weights**

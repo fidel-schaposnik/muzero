@@ -1,6 +1,6 @@
 from utils import *
 from math import sqrt, log, exp
-import random
+import random, time
 
 
 class Node:
@@ -13,15 +13,14 @@ class Node:
         self.hidden_state = None
         self.num_simulations = 0
         self.value_dict_sum = {}
+        self.value = 0
 
     def expanded(self):
         return len(self.children) > 0
 
-    def value(self, discount):
-        if self.num_simulations == 0:
-            return 0
-        else:
-            return self.reward_dict.get(self.gets_reward, 0) + discount * self.value_dict_sum.get(self.gets_reward, 0) / self.num_simulations
+    def update_value(self, discount):
+        self.value = self.reward_dict.get(self.gets_reward, 0) + discount * self.value_dict_sum.get(self.gets_reward, 0) / self.num_simulations
+        return self.value
 
 
 def select_leaf(config, node, min_max_stats):
@@ -32,22 +31,17 @@ def select_leaf(config, node, min_max_stats):
 
 def select_child(config, node, min_max_stats):
     # if not node.parent:
-    #     print({action: child.value(config.discount) for action, child in node.children.items()})
+    #     for action, child in node.children.items():
+    #         print('{}-{}: ({:.2f}, {:.2f})'.format(action, child.num_simulations, min_max_stats.normalize(child.value), child.prior * config.exploration_function(node.num_simulations, child.num_simulations)), end=', ')
+    #     print()
+    #     input('Press to continue')
     _, action, child = max((ucb_score(config, child, min_max_stats), action, child) for action, child in node.children.items())
+    # print('Going down {}'.format(action))
     return action, child
 
 
 def ucb_score(config, node, min_max_stats):
-    return min_max_stats.normalize(node.value(config.discount)) + node.prior * sqrt(2*node.parent.num_simulations)/(node.num_simulations + 1)
-    # return node.value(config.discount) + node.prior * sqrt(2 * log(node.parent.num_simulations + 1) / (node.num_simulations + 1))
-    # pb_c = math.log((parent.visit_count + config.pb_c_base + 1) / config.pb_c_base) + config.pb_c_init
-    # pb_c *= math.sqrt(parent.visit_count) / (child.visit_count + 1)
-    # prior_score = pb_c * child.prior
-    # if child.visit_count > 0:
-    #   value_score = child.reward + config.discount * min_max_stats.normalize(child.value())
-    # else:
-    #   value_score = 0
-    # return prior_score + value_score
+    return min_max_stats.normalize(node.value) + node.prior * config.exploration_function(node.parent.num_simulations, node.num_simulations)
 
 
 def expand_node(node, to_play, actions, network_output):
@@ -63,7 +57,7 @@ def backpropagate(node, value_dict, discount, min_max_stats):
         for player, value in value_dict.items():
             node.value_dict_sum[player] = node.value_dict_sum.setdefault(player, 0) + value
         node.num_simulations += 1
-        min_max_stats.update(node.value(discount))
+        min_max_stats.update(node.update_value(discount))
 
         for player, value in value_dict.items():
             value_dict[player] *= discount
@@ -77,23 +71,31 @@ def batch_mcts(config, batch_root, network):
 
     batch_hidden_state = np.empty(network.hidden_state_shape(len(batch_root)), dtype=np.float32)
 
+    # TRANSVERSAL_TIME = EXPANSION_TIME = 0
     for _ in range(config.num_simulations):
         batch_leaf, batch_last_action = [], []
+        # start = time.time()
         for i, root in enumerate(batch_root):
             last_action, leaf = select_leaf(config, root, min_max_stats)
             batch_last_action.append(last_action)
             batch_leaf.append(leaf)
             batch_hidden_state[i] = leaf.parent.hidden_state
+        # end = time.time()
+        # TRANSVERSAL_TIME += end - start
 
         batch_network_output = network.recurrent_inference(batch_hidden_state, batch_last_action)
 
+        # start = time.time()
         for leaf, network_output in zip(batch_leaf, batch_network_output.split_batch()):
             expand_node(leaf, network_output.to_play, config.action_space, network_output)
             backpropagate(leaf, network_output.value, config.discount, min_max_stats)
+        # end = time.time()
+        # EXPANSION_TIME += end - start
+    # return TRANSVERSAL_TIME, EXPANSION_TIME
 
 
-def softmax_sample(distribution, temperature: float):
-    if temperature == 0.0:
+def softmax_sample(distribution, temperature, training):
+    if not training or temperature == 0.0:
         return max(distribution)
     else:
         weights = np.array([count**(1/temperature) for count, action in distribution])
@@ -101,11 +103,12 @@ def softmax_sample(distribution, temperature: float):
         return random.choices(distribution, weights=weights)[0]
 
 
-def select_action(config, node, num_moves, num_steps):
+def select_action(config, node, num_moves, num_steps, training):
     visit_counts = [(child.num_simulations, action) for action, child in node.children.items()]
     temperature = config.visit_softmax_temperature_fn(num_moves=num_moves, num_steps=num_steps)
-    _, action = softmax_sample(visit_counts, temperature)
+    _, action = softmax_sample(visit_counts, temperature, training)
     return action
+
 
 def add_exploration_noise(config, node):
     actions = list(node.children.keys())
@@ -115,18 +118,27 @@ def add_exploration_noise(config, node):
         node.children[a].prior = node.children[a].prior * (1 - frac) + n * frac
 
 
-def batch_make_move(config, network, games):
+def batch_make_move(config, network, games, training):
     batch_root = [Node() for _ in games]
     batch_current_observation = np.array([game.make_image() for game in games])
     batch_initial_inference = network.initial_inference(batch_current_observation)
 
+    # start = time.time()
     for root, game, initial_inference in zip(batch_root, games, batch_initial_inference.split_batch()):
         expand_node(root, game.to_play(), game.legal_actions(), initial_inference)
         add_exploration_noise(config, root)
+    # end = time.time()
+    # PRE_TIME = end-start
 
+    # TRANSVERSAL_TIME, EXPANSION_TIME =
     batch_mcts(config, batch_root, network)
 
+    # start = time.time()
     for root, game in zip(batch_root, games):
         game.store_search_statistics(root)
-        action = select_action(config, root, len(game.history), network.training_steps())
+        action = select_action(config, root, num_moves=len(game.history), num_steps=network.training_steps(), training=training)
         game.apply(action)
+    # end = time.time()
+    # POST_TIME = end-start
+    #
+    # return TRANSVERSAL_TIME, EXPANSION_TIME, PRE_TIME, POST_TIME

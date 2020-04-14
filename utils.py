@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-import datetime
+import datetime, string, random
 
 
 MAXIMUM_FLOAT_VALUE = float('inf')
@@ -8,6 +8,10 @@ MAXIMUM_FLOAT_VALUE = float('inf')
 
 def timestamp():
     return datetime.datetime.now().strftime("%d-%m-%Y--%H-%M")
+
+
+def random_id():
+    return ''.join(random.choice(string.ascii_letters) for _ in range(8))
 
 
 class MinMaxStats:

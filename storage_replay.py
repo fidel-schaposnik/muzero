@@ -1,7 +1,8 @@
 import time, pickle, requests, json, tempfile, os
 from mcts import *
-from utils import timestamp
-from flask import Flask, send_file, request
+from environment import *
+from utils import *
+from flask import Flask, send_file, request, send_from_directory
 
 
 class ReplayBuffer:
@@ -42,33 +43,16 @@ class ReplayBuffer:
         return random.randrange(len(game_history)-self.num_unroll_steps+1)
 
 
-# class SharedStorage:
-#     """
-#     Storage space for networks during training.
-#     """
-#     def __init__(self, config):
-#         self.networks = {}
-#         self.game_params = config.game_params
-#         self.network_class = config.network_class
-#
-#     def latest_network(self):
-#         if not self.networks:
-#             self.networks[0] = self.make_uniform_network(**self.game_params)
-#         return self.networks[max(self.networks.keys())]
-#
-#     def save_network(self, step, network):
-#         self.networks[step] = network
-
-
 class MuZeroServer:
     def __init__(self, config, data_path):
-        self.name = config.name
-        self.num_unroll_steps = config.num_unroll_steps
-        self.td_steps = config.td_steps
-        self.discount = config.discount
-        # self.config_hash = config.hash()
-
-        self.server_dir = os.path.join(data_path, self.name, timestamp())
+        self.config = config
+        self.game = config.new_game()
+        self.server_dir = os.path.join(data_path, self.config.name, timestamp())
+        self.total_games = 0
+        self.num_batches = 0
+        self.num_unique = 0
+        self.clients = set()
+        self.start_time = datetime.datetime.now()
 
         # Shared storage
         self.shared_storage_dir = os.path.join(self.server_dir, 'shared_storage')
@@ -85,15 +69,15 @@ class MuZeroServer:
         self.replay_buffer_dir = os.path.join(self.server_dir, 'replay_buffer')
         os.makedirs(self.replay_buffer_dir, exist_ok=True)
 
-        self.total_games = 0
-        self.num_batches = 0
-        self.num_unique = 0
+        # Save config file
+        with open(os.path.join(self.server_dir, 'config.pickle'), 'wb') as config_file:
+            pickle.dump(config, config_file)
 
     def latest_step(self):
         return max(self.networks)
 
     def network_filepath_prefix(self, step):
-        return os.path.join(self.shared_storage_dir, '{}_it{}'.format(self.name, step))
+        return os.path.join(self.shared_storage_dir, '{}_it{}'.format(self.config.name, step))
 
     def network_filepath(self, step, network_name):
         return '{}_{}.h5'.format(self.network_filepath_prefix(step), network_name[:3])
@@ -104,20 +88,27 @@ class MuZeroServer:
 
         return self.network_filepath(self.latest_step(), network_name)
 
+    def register_client(self, client_id):
+        self.clients.add(client_id)
+
     def stats(self):
         return {'latest_step': self.latest_step(),
-         'num_games': len(self.replay_buffer.buffer),
-         'num_positions': self.replay_buffer.num_positions,
-         'num_unique': self.num_unique,
-         'total_games': self.total_games,
-         'num_backups': self.total_games // self.replay_buffer.window_size,
-         'num_batches': self.num_batches}
+                'num_games': len(self.replay_buffer.buffer),
+                'num_positions': self.replay_buffer.num_positions,
+                'num_unique': self.num_unique,
+                'total_games': self.total_games,
+                'num_backups': self.total_games // self.replay_buffer.window_size,
+                'num_batches': self.num_batches,
+                'num_clients': len(self.clients),
+                'total_runtime': str(datetime.datetime.now() - self.start_time)}
 
     def summary(self):
-        with open('index.html', 'r') as template_file:
+        with open('server/index.html', 'r') as template_file:
             template = template_file.read()
         for key, value in self.stats().items():
             template = template.replace(key, str(value))
+        player_radiobuttons = '\n'.join('<tr><td><input type="radio" name="player" value="{}">{}</td></tr>'.format(player.player_id, player) for player in self.game.environment.players())
+        template = template.replace('player_radiobuttons', player_radiobuttons)
         return template
 
     def save_network(self, step, weight_files):
@@ -126,10 +117,10 @@ class MuZeroServer:
                 weight_files[network_name].save(self.network_filepath(step, network_name))
             self.network.load_weights(self.network_filepath_prefix(step))
         except:
-            return 'Could not receive networks!'
+            return 'Server could not receive networks!'
         else:
             self.networks.add(step)
-            return 'Successfully received networks at step {}!'.format(step)
+            return 'Server successfully received network at step {}!'.format(step)
 
     def backup_filepath(self):
         num_backups = self.total_games//self.replay_buffer.window_size
@@ -147,27 +138,68 @@ class MuZeroServer:
             if self.total_games % self.replay_buffer.window_size == 0:
                 self.backup_histories()
         self.num_unique = self.replay_buffer.num_unique()
-        return 'Successfully saved {} games!'.format(len(histories))
+        return 'Server successfully saved {} games!'.format(len(histories))
 
     def sample_batch(self):
         self.num_batches += 1
-        return self.replay_buffer.sample_batch(self.num_unroll_steps, self.td_steps, self.discount)
+        return self.replay_buffer.sample_batch(self.config.num_unroll_steps, self.config.td_steps, self.config.discount)
+
+    def show_game(self):
+        with open('server/play.html', 'r') as template_file:
+            template = template_file.read()
+
+        template = template.replace('human_player', str(self.game.to_play().player_id))
+        template = template.replace('current_state', self.game.state_repr().replace('\n', '<br>'))
+        template = template.replace('to_play', str(self.game.to_play()))
+        template = template.replace('finished', str(self.game.terminal()))
+        template = template.replace('button_status', ' disabled' if self.game.terminal() else '')
+
+        actions = []
+        for action in self.game.legal_actions():
+            action_row = '<input type="radio" name="move" value="{}">{}<br>'.format(action.index, action)
+            actions.append(action_row)
+        template = template.replace('legal_actions', '\n'.join(actions))
+
+        history_rows = []
+        for i, (action, reward) in enumerate(zip(self.game.history.actions, self.game.history.rewards)):
+            state = self.game.state_repr(i).replace('\n', '<br>')
+            row = '<tr><td><tt>{}</tt></td><td>{}</td><td>{}</td><td>{}</td></tr>'.format(state, self.game.history.to_plays[i-1] if i else Player(0), action, reward)
+            history_rows.append(row)
+
+        template = template.replace('history_rows', '\n'.join(history_rows))
+        return template
+
+    def play(self, player, action):
+        if not action:
+            self.game = self.config.new_game()
+        else:
+            self.game.apply(action)
+        while not self.game.terminal() and len(self.game.history) < self.config.max_moves and self.game.to_play() != player:
+            batch_make_move(self.config, self.network, [self.game], training=False)
+            print('{} moves {}'.format(self.game.history.to_plays[-1], self.game.history.actions[-1]))
+        return self.show_game()
 
 
 class MuZeroClient:
-    def __init__(self, config, server_address):
-        self.name = config.name
-        self.make_uniform_network = config.make_uniform_network
+    def __init__(self, server_address):
         self.server_address = server_address
         self.network_names = ['representation', 'dynamics', 'prediction']
         self.network_step = -1
         self.network = None
 
+        self.client_id = random_id()
+        self.session = requests.Session()
+        self.session.headers.update({'User-Agent': self.client_id})
+        print('Starting client with id={}...'.format(self.client_id))
+
+        self.config = pickle.loads(self.session.get(server_address + 'config').content)
+        print('Loaded configuration file for game {} from server {}!'.format(self.config.name, self.server_address))
+
     def stats(self):
-        return json.loads(requests.get(self.server_address + 'json').text)
+        return json.loads(self.session.get(self.server_address + 'json').text)
 
     def network_filepath_prefix(self, step):
-        return os.path.join(tempfile.gettempdir(), '{}_it{}'.format(self.name, step))
+        return os.path.join(tempfile.gettempdir(), '{}_it{}'.format(self.config.name, step))
 
     def network_filepath(self, step, network_name):
         return '{}_{}.h5'.format(self.network_filepath_prefix(step), network_name[:3])
@@ -178,16 +210,16 @@ class MuZeroClient:
         if self.network_step < server_stats['latest_step']:
             self.network_step = server_stats['latest_step']
             for network_name in self.network_names:
-                response = requests.get(self.server_address + 'storage/'+network_name)
+                response = self.session.get(self.server_address + 'storage/'+network_name)
                 with open(self.network_filepath(self.network_step, network_name), 'wb') as tmp_file:
                     tmp_file.write(response.content)
-
-            self.network = self.make_uniform_network()
+            self.network = self.config.make_uniform_network()
             self.network.load_weights(self.network_filepath_prefix(self.network_step))
             self.network.steps = self.network_step
 
             for network_name in self.network_names:
                 os.remove(self.network_filepath(self.network_step, network_name))
+            print('Client successfully received network at step {}!'.format(self.network_step))
         return self.network
 
     def save_network(self, network):
@@ -196,28 +228,35 @@ class MuZeroClient:
         weight_files = {}
         for network_name in self.network_names:
             filepath = self.network_filepath(step, network_name)
-            with open(filepath, 'rb') as file :
+            with open(filepath, 'rb') as file:
                 weight_files[network_name] = file.read()
             os.remove(filepath)
 
-        response = requests.post(self.server_address+'storage', data={'step': step}, files=weight_files)
+        response = self.session.post(self.server_address+'storage', data={'step': step}, files=weight_files)
         print(response.text)
 
     def save_game_histories(self, histories):
         payload = pickle.dumps(histories)
-        response = requests.post(self.server_address + 'replay_buffer', files={'histories': payload})
+        response = self.session.post(self.server_address + 'replay_buffer', files={'histories': payload})
         print(response.text)
 
     def sample_batch(self):
-        response = requests.get(self.server_address + 'replay_buffer')
+        response = self.session.get(self.server_address + 'replay_buffer')
         return pickle.loads(response.content)
 
 
-def batch_selfplay(config, replay_buffer, network, num_games):
+def batch_selfplay(config, replay_buffer, network, num_games, training=True):
     start = time.time()
     games = [config.new_game() for _ in range(num_games)]
+
+    # TRANSVERSAL_TIME, EXPANSION_TIME, PRE_TIME, POST_TIME = 0, 0, 0, 0
     while games:
-        batch_make_move(config, network, games)
+        batch_make_move(config, network, games, training)
+        # NEW_TRANSVERSAL_TIME, NEW_EXPANSION_TIME, NEW_PRE_TIME, NEW_POST_TIME =
+        # TRANSVERSAL_TIME += NEW_TRANSVERSAL_TIME
+        # EXPANSION_TIME += NEW_EXPANSION_TIME
+        # PRE_TIME += NEW_PRE_TIME
+        # POST_TIME += NEW_POST_TIME
 
         open_games = []
         for game in games:
@@ -228,6 +267,8 @@ def batch_selfplay(config, replay_buffer, network, num_games):
         games = open_games
     end = time.time()
     print('Generated {} games in {:.2f} seconds, {:.2f} per game!'.format(num_games, end-start, (end-start)/num_games))
+    # print('Trans: {:.2f}; Exp: {:.2f}; PreProc: {:.2f}; PostProc: {:.2f}'.format(TRANSVERSAL_TIME, EXPANSION_TIME, PRE_TIME, POST_TIME))
+    # print('Total number of actions: {}'.format(replay_buffer.num_positions))
 
 
 def start_server(config, data_path):
@@ -264,5 +305,23 @@ def start_server(config, data_path):
         else:
             game_histories = pickle.load(request.files['histories'])
             return server.save_game_histories(game_histories)
+
+    @api.route('/play', methods=['GET', 'POST'])
+    def play():
+        if request.method == 'GET':
+            return server.show_game()
+        else:
+            player = Player(int(request.form.get('player')))
+            move = request.form.get('move')
+            return server.play(player, Action(int(move)) if move else None)
+
+    @api.route('/css/<path:path>')
+    def send_css(path):
+        return send_from_directory('server/css', path)
+
+    @api.route('/config', methods=['GET'])
+    def get_config():
+        server.register_client(request.user_agent)
+        return send_file(os.path.join(server.server_dir, 'config.pickle'), attachment_filename='config.pickle')
 
     api.run()
