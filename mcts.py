@@ -13,7 +13,7 @@ class Node:
         self.hidden_state = None
         self.num_simulations = 0
         self.value_dict_sum = {}
-        self.value = 0
+        self.value = NOT_A_NUMBER
 
     def expanded(self):
         return len(self.children) > 0
@@ -21,6 +21,14 @@ class Node:
     def update_value(self, discount):
         self.value = self.reward_dict.get(self.gets_reward, 0) + discount * self.value_dict_sum.get(self.gets_reward, 0) / self.num_simulations
         return self.value
+
+    def print(self, _prefix='', name='Root', _last=True):
+        print(_prefix, '`- ' if _last else '|- ', '{}: mean_value={}; reward={}'.format(name, {player: float(value/self.num_simulations) for player, value in self.value_dict_sum.items()}, {player: float(value) for player, value in self.reward_dict.items()}), sep="")
+        _prefix += '   ' if _last else '|  '
+        child_count = len(self.children)
+        for i, (action, child) in enumerate(self.children.items()):
+            _last = i == (child_count - 1)
+            child.print(_prefix, action, _last)
 
 
 def select_leaf(config, node, min_max_stats):
@@ -34,7 +42,7 @@ def select_child(config, node, min_max_stats):
     #     for action, child in node.children.items():
     #         print('{}-{}: ({:.2f}, {:.2f})'.format(action, child.num_simulations, min_max_stats.normalize(child.value), child.prior * config.exploration_function(node.num_simulations, child.num_simulations)), end=', ')
     #     print()
-    #     input('Press to continue')
+    # input('Press to continue')
     _, action, child = max((ucb_score(config, child, min_max_stats), action, child) for action, child in node.children.items())
     # print('Going down {}'.format(action))
     return action, child
@@ -55,7 +63,7 @@ def expand_node(node, to_play, actions, network_output):
 def backpropagate(node, value_dict, discount, min_max_stats):
     while node:
         for player, value in value_dict.items():
-            node.value_dict_sum[player] = node.value_dict_sum.setdefault(player, 0) + value
+            node.value_dict_sum[player] = node.value_dict_sum.get(player, 0) + value
         node.num_simulations += 1
         min_max_stats.update(node.update_value(discount))
 
@@ -76,6 +84,8 @@ def batch_mcts(config, batch_root, network):
         batch_leaf, batch_last_action = [], []
         # start = time.time()
         for i, root in enumerate(batch_root):
+            # print(min_max_stats)
+            # root.print()
             last_action, leaf = select_leaf(config, root, min_max_stats)
             batch_last_action.append(last_action)
             batch_leaf.append(leaf)
@@ -142,3 +152,29 @@ def batch_make_move(config, network, games, training):
     # POST_TIME = end-start
     #
     # return TRANSVERSAL_TIME, EXPANSION_TIME, PRE_TIME, POST_TIME
+
+
+def batch_selfplay(config, replay_buffer, network, num_games, training=True):
+    start = time.time()
+    games = [config.new_game() for _ in range(num_games)]
+
+    # TRANSVERSAL_TIME, EXPANSION_TIME, PRE_TIME, POST_TIME = 0, 0, 0, 0
+    while games:
+        batch_make_move(config, network, games, training)
+        # NEW_TRANSVERSAL_TIME, NEW_EXPANSION_TIME, NEW_PRE_TIME, NEW_POST_TIME =
+        # TRANSVERSAL_TIME += NEW_TRANSVERSAL_TIME
+        # EXPANSION_TIME += NEW_EXPANSION_TIME
+        # PRE_TIME += NEW_PRE_TIME
+        # POST_TIME += NEW_POST_TIME
+
+        open_games = []
+        for game in games:
+            if game.terminal() or len(game.history) == config.max_moves:
+                replay_buffer.save_game(game)
+            else:
+                open_games.append(game)
+        games = open_games
+    end = time.time()
+    print('Generated {} games in {:.2f} seconds, {:.2f} per game!'.format(num_games, end-start, (end-start)/num_games))
+    # print('Trans: {:.2f}; Exp: {:.2f}; PreProc: {:.2f}; PostProc: {:.2f}'.format(TRANSVERSAL_TIME, EXPANSION_TIME, PRE_TIME, POST_TIME))
+    # print('Total number of actions: {}'.format(replay_buffer.num_positions))
