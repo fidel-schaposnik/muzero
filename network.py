@@ -32,13 +32,13 @@ def logits_head(name, inputs, num_logits, num_filters, kernel_size):
     return x
 
 
-def scalar_head(name, inputs, num_outputs, num_filters, kernel_size, hidden_size):
+def scalar_head(name, inputs, scalar_activation, num_outputs, num_filters, kernel_size, hidden_size):
     x = tf.keras.layers.Conv2D(num_filters, kernel_size, padding='same', name=name + '_conv')(inputs)
     x = tf.keras.layers.BatchNormalization(name=name + '_norm')(x)
     x = tf.keras.layers.Activation('relu', name=name + '_relu')(x)
     x = tf.keras.layers.Flatten(name=name + '_flatten')(x)
     x = tf.keras.layers.Dense(hidden_size, activation='relu', name=name + '_hidden')(x)
-    x = tf.keras.layers.Dense(num_outputs, activation='tanh', name=name + '_output')(x)
+    x = tf.keras.layers.Dense(num_outputs, activation=scalar_activation, name=name + '_output')(x)
     return x
 
 
@@ -75,7 +75,7 @@ def fully_connected_network(name, inputs, num_layers, num_units):
 def prediction_network(name, input_shape, num_logits, num_players,
                        tower_height, conv_filters, conv_kernel_size,
                        policy_filters, policy_kernel_size,
-                       value_filters, value_kernel_size, value_hidden_size):
+                       scalar_activation, value_filters, value_kernel_size, value_hidden_size):
 
     inputs = tf.keras.Input(shape=input_shape, name=name + '_input_hidden_state')
 
@@ -85,7 +85,8 @@ def prediction_network(name, input_shape, num_logits, num_players,
     policy_output = logits_head(name=name + '_policy', inputs=residual_output, num_logits=num_logits,
                                 num_filters=policy_filters, kernel_size=policy_kernel_size)
 
-    value_output = scalar_head(name=name + '_value', inputs=residual_output, num_outputs=num_players,
+    value_output = scalar_head(name=name + '_value', inputs=residual_output,
+                               num_outputs=num_players, scalar_activation=scalar_activation,
                                num_filters=value_filters, kernel_size=value_kernel_size, hidden_size=value_hidden_size)
 
     return tf.keras.Model(inputs=inputs, outputs=[policy_output, value_output], name=name)
@@ -115,7 +116,7 @@ def categorical_prediction_network(
 
 def fully_connected_prediction_network(name, input_shape, num_players, num_logits,
                                        num_layers, num_units,
-                                       value_filters, value_kernel_size, value_hidden_size,
+                                       scalar_activation, value_filters, value_kernel_size, value_hidden_size,
                                        policy_filters, policy_kernel_size):
     inputs = tf.keras.Input(shape=input_shape, name=name + '_input_hidden_state')
 
@@ -126,7 +127,8 @@ def fully_connected_prediction_network(name, input_shape, num_players, num_logit
     policy_output = logits_head(name=name + '_policy', inputs=hidden_state, num_logits=num_logits,
                                 num_filters=policy_filters, kernel_size=policy_kernel_size)
 
-    value_output = scalar_head(name=name + '_value', inputs=hidden_state, num_outputs=num_players,
+    value_output = scalar_head(name=name + '_value', inputs=hidden_state,
+                               num_outputs=num_players, scalar_activation=scalar_activation,
                                num_filters=value_filters, kernel_size=value_kernel_size, hidden_size=value_hidden_size)
 
     return tf.keras.Model(inputs=inputs, outputs=[policy_output, value_output], name=name)
@@ -134,7 +136,7 @@ def fully_connected_prediction_network(name, input_shape, num_players, num_logit
 
 def dynamics_network(name, input_shape, num_players,
                      tower_height, conv_filters, conv_kernel_size,
-                     reward_filters, reward_kernel_size, reward_hidden_size,
+                     scalar_activation, reward_filters, reward_kernel_size, reward_hidden_size,
                      toplay_filters, toplay_kernel_size
                      ):
 
@@ -144,7 +146,8 @@ def dynamics_network(name, input_shape, num_players,
                                      height=tower_height, num_filters=conv_filters, kernel_size=conv_kernel_size)
     hidden_state = tf.keras.layers.Lambda(hidden_state_normalization, name=name + '_hidden_state_norm')(residual_output)
 
-    reward_output = scalar_head(name=name + '_reward', inputs=hidden_state, num_outputs=num_players,
+    reward_output = scalar_head(name=name + '_reward', inputs=hidden_state,
+                                num_outputs=num_players, scalar_activation=scalar_activation,
                                 num_filters=reward_filters, kernel_size=reward_kernel_size, hidden_size=reward_hidden_size)
 
     toplay_logits = logits_head(name=name + '_toplay', inputs=hidden_state, num_logits=num_players,
@@ -177,7 +180,7 @@ def categorical_dynamics_network(name, input_shape, num_players,
 
 def fully_connected_dynamics_network(name, input_shape, num_players,
                                      num_layers, num_units,
-                                     reward_filters, reward_kernel_size, reward_hidden_size,
+                                     scalar_activation, reward_filters, reward_kernel_size, reward_hidden_size,
                                      toplay_filters, toplay_kernel_size
                                      ):
     inputs = tf.keras.Input(shape=input_shape, name=name + '_input_hidden_state')
@@ -186,7 +189,8 @@ def fully_connected_dynamics_network(name, input_shape, num_players,
 
     hidden_state = tf.keras.layers.Reshape(target_shape=(num_units,1,1), name=name+'_hidden_state')(hidden_state)
 
-    reward_output = scalar_head(name=name + '_reward', inputs=hidden_state, num_outputs=num_players,
+    reward_output = scalar_head(name=name + '_reward', inputs=hidden_state,
+                                num_outputs=num_players, scalar_activation=scalar_activation,
                                 num_filters=reward_filters, kernel_size=reward_kernel_size,
                                 hidden_size=reward_hidden_size)
 
@@ -304,17 +308,17 @@ class Network:
         """
         raise ImplementationError('state_action_encoding', 'Network')
 
-    def initial_inference(self, batch_image):
+    def initial_inference(self, batch_image, training=False):
         """
         Apply representation + prediction networks to a batch of observations.
         """
         start = time.time()
-        batch_hidden_state = self.representation(batch_image)
+        batch_hidden_state = self.representation(batch_image, training=training)
         end = time.time()
         self.REPRESENTATION_TIME += end-start
 
         start = time.time()
-        batch_policy_logits, batch_value = self.prediction(batch_hidden_state)
+        batch_policy_logits, batch_value = self.prediction(batch_hidden_state, training=training)
         end = time.time()
         self.PREDICTION_TIME += end - start
 
@@ -325,7 +329,7 @@ class Network:
                              to_play=tf.zeros(self.toplay_shape(len(batch_image))),
                              inv_scalar_transformation=self.inv_scalar_transformation)
 
-    def recurrent_inference(self, batch_hidden_state, batch_action):
+    def recurrent_inference(self, batch_hidden_state, batch_action, training=False):
         """
         Apply the dynamics + prediction networks to a batch of hidden states.
         """
@@ -335,12 +339,12 @@ class Network:
         self.ENCODING_TIME += end-start
 
         start = time.time()
-        batch_hidden_state, batch_reward, batch_toplay = self.dynamics(batch_dynamics_input)
+        batch_hidden_state, batch_reward, batch_toplay = self.dynamics(batch_dynamics_input, training=training)
         end = time.time()
         self.DYNAMICS_TIME += end-start
 
         start = time.time()
-        batch_policy_logits, batch_value = self.prediction(batch_hidden_state)
+        batch_policy_logits, batch_value = self.prediction(batch_hidden_state, training=training)
         end = time.time()
         self.PREDICTION_TIME += end-start
 
