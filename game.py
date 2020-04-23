@@ -26,11 +26,6 @@ class GameHistory:
     def __len__(self):
         return len(self.actions)
 
-    def __hash__(self):
-        if not self.action_list_hash:
-            self.action_list_hash = sum(action.index * self.action_space_size**i for i, action in enumerate(self.actions))
-        return self.action_list_hash
-
     def make_target(self, state_index, num_unroll_steps, td_steps, discount):
         targets = []
         for current_index in range(state_index, state_index + num_unroll_steps + 1):

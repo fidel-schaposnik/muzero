@@ -16,7 +16,7 @@ class MuZeroConfig:
                  td_steps,
                  training_steps,
                  checkpoint_interval,
-                 learning_rate,
+                 optimizer,
                  num_simulations,
                  known_bounds,
                  discount,
@@ -63,7 +63,7 @@ class MuZeroConfig:
         self.td_steps = td_steps
         self.training_steps = training_steps
         self.checkpoint_interval = checkpoint_interval
-        self.learning_rate = learning_rate
+        self.optimizer = optimizer
 
     def visit_softmax_temperature_fn(self, num_moves, num_steps):
         if num_moves < self.freezing_moves:

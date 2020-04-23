@@ -68,7 +68,7 @@ for production.
 The following games have already been implemented (though only partial experiments 
 have been carried out with them):
 
-- CartPole-v0 (`games/cartpole.py`)
+- [CartPole-v0](https://github.com/openai/gym/wiki/CartPole-v0) (`games/cartpole.py`)
 - Tic-tac-toe (`games/tictactoe.py`)
 - One-arm bandit (`games/onearmbandit.py`)
 
@@ -78,7 +78,8 @@ argument with the corresponding filename, e.g. `--game tictactoe`.
 
 ## Other features
 
-- **Tensorboard logging:** use `tensorboard --logdir checkpoints` to visualize training
+- **Tensorboard logging:** on the base directory use `tensorboard --logdir checkpoints` 
+to visualize training.
 
 - **Easily add games**: just add a file to the `games` directory defining MuZero's
 configuration for the game of your choice, and implementing sub-classes for the 
@@ -100,10 +101,11 @@ server to play against the latest network directly on the browser in
 asynchronous mode.
 
 - **Pre-built networks:** basic residual and fully connected architectures are defined
-in `network.py`, and can be used as is simply defining the network parameters 
-(see examples in `games` directory). 
+in `network.py`, and can be reused simply defining the network parameters 
+(see examples in `games` directory).
 
 ## To-do list
 
 - **Prioritized replay**
 - **Optimize hyperparameters for some of the included weights**
+- **Pre-trained networks**

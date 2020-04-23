@@ -61,3 +61,4 @@ def play_against_network(config, network, human_player_id=None, verbose=True):
         if verbose:
             print('Reward: {}'.format(game.history.rewards[-1]))
             print(game.state_repr())
+    return game

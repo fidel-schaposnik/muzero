@@ -7,7 +7,7 @@ import gym
 
 def make_config(window_size=int(1e3), batch_size=2048,
                 training_steps=int(1e4), checkpoint_interval=int(1e2), num_simulations=10,
-                num_layers=2, num_units=128,  # Fully connected sub-network parameters
+                num_layers=2, num_units=64,  # Fully connected sub-network parameters
                 policy_filters=32, policy_kernel_size=(3, 3),  # Policy sub-network parameters
                 value_filters=32, value_kernel_size=(3, 3),  # Value sub-network parameters
                 reward_filters=32, reward_kernel_size=(10, 1),  # Reward sub-network parameters
@@ -22,17 +22,17 @@ def make_config(window_size=int(1e3), batch_size=2048,
                         window_size=window_size,
                         batch_size=batch_size,
                         num_unroll_steps=5,
-                        td_steps=10,
+                        td_steps=50,
                         training_steps=training_steps,
                         checkpoint_interval=checkpoint_interval,
-                        learning_rate=.001,
+                        optimizer=tf.keras.optimizers.SGD(lr=.001, momentum=0.9),
                         num_simulations=num_simulations,
                         known_bounds=None,
-                        discount=0.9,
-                        freezing_moves=50,
+                        discount=0.99,
+                        freezing_moves=20,
                         root_dirichlet_alpha=0.25,
                         root_exploration_noise=0.1,
-                        max_moves=200,
+                        max_moves=500,
                         game_class=CartPoleGame,
                         network_class=CartPoleNetwork,
                         action_space_size=2,
@@ -41,7 +41,7 @@ def make_config(window_size=int(1e3), batch_size=2048,
                         value_filters=value_filters, value_kernel_size=value_kernel_size,
                         reward_filters=reward_filters, reward_kernel_size=reward_kernel_size,
                         toplay_filters=toplay_filters, toplay_kernel_size=toplay_kernel_size,
-                        hidden_size=hidden_size
+                        hidden_size=hidden_size, scalar_activation='relu'
                         )
 
 
@@ -52,10 +52,11 @@ class CartPoleEnvironment(Environment):
 
     def __init__(self, **kwargs):  # kwargs collects arguments not used here (network parameters)
         super().__init__(action_space_size=2, num_players=1)
-        self.env = gym.make('CartPole-v0')
+        self.env = gym.make('CartPole-v1')
         self.state = self.env.reset()
         self.ended = False
         self.cumulative_reward = 0.0
+        self.max_moves = self.env._max_episode_steps
 
     def is_legal_action(self, action):
         return True
@@ -88,10 +89,11 @@ class CartPoleGame(Game):
         self.history.observations.append(self.make_image())
 
     def state_repr(self, state_index=-1):
+        # self.environment.env.render()
         return 'Cart position: {}\nCart velocity: {}\nPole angle: {}\nPole velocity at tip: {}'.format(*self.history.observations[state_index])
 
     def make_image(self):
-        return self.environment.get_state().astype(np.float32)
+        return np.append(self.environment.get_state(), len(self.history)/self.environment.max_moves).astype(np.float32)
 
 
 class CartPoleNetwork(Network):
@@ -105,11 +107,11 @@ class CartPoleNetwork(Network):
                  value_filters, value_kernel_size,  # Value head parameters
                  reward_filters, reward_kernel_size,  # Reward head parameters
                  toplay_filters, toplay_kernel_size,  # To-play head parameters
-                 hidden_size,  # For value and reward heads
+                 hidden_size, scalar_activation,  # For value and reward heads
                  **kwargs  # Collects other parameters not used here (mostly for game definition)
                  ):
         """
-        Representation input (observation batch):       (batch_size, 4).
+        Representation input (observation batch):       (batch_size, 5).
         Representation output (hidden state batch):     (batch_size, num_units, 1, 1)
 
         Encoded action batch:                           (batch_size, num_units, 1, 1)
@@ -128,16 +130,16 @@ class CartPoleNetwork(Network):
 
         super().__init__()
 
-        self.representation = fully_connected_representation_network(name='CPRep', input_shape=(4,),
+        self.representation = fully_connected_representation_network(name='CPRep', input_shape=(5,),
                                                                      num_layers=num_layers, num_units=num_units)
 
-        self.dynamics = fully_connected_dynamics_network(name='CPDyn', input_shape=(num_units,1,2), num_players=1,
-                                                         num_layers=num_layers, num_units=num_units,
+        self.dynamics = fully_connected_dynamics_network(name='CPDyn', input_shape=(num_units, 1, 2), num_players=1,
+                                                         num_layers=num_layers, num_units=num_units, scalar_activation=scalar_activation,
                                                          reward_filters=reward_filters, reward_kernel_size=reward_kernel_size, reward_hidden_size=hidden_size,
                                                          toplay_filters=toplay_filters, toplay_kernel_size=toplay_kernel_size)
 
-        self.prediction = fully_connected_prediction_network(name='CPPre', input_shape=(num_units,1,1), num_logits=2, num_players=1,
-                                                             num_layers=num_layers, num_units=num_units,
+        self.prediction = fully_connected_prediction_network(name='CPPre', input_shape=(num_units, 1, 1), num_logits=2, num_players=1,
+                                                             num_layers=num_layers, num_units=num_units, scalar_activation=scalar_activation,
                                                              policy_filters=policy_filters, policy_kernel_size=policy_kernel_size,
                                                              value_filters=value_filters, value_kernel_size=value_kernel_size, value_hidden_size=hidden_size)
 

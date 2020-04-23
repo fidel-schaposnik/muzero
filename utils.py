@@ -1,9 +1,11 @@
 import tensorflow as tf
 import numpy as np
 import datetime, string, random
+from math import isnan
 
 
 MAXIMUM_FLOAT_VALUE = float('inf')
+NOT_A_NUMBER = float('nan')
 
 
 def timestamp():
@@ -22,20 +24,19 @@ class MinMaxStats:
     def __init__(self, known_bounds=None):
         self.minimum, self.maximum = known_bounds if known_bounds else (MAXIMUM_FLOAT_VALUE, -MAXIMUM_FLOAT_VALUE)
 
-    def update(self, value: float):
+    def update(self, value):
         self.maximum = max(self.maximum, value)
         self.minimum = min(self.minimum, value)
 
-    def normalize(self, value: float) -> float:
+    def normalize(self, value):
         if self.maximum > self.minimum:
             # We normalize only when we have set the maximum and minimum values.
-            return (value - self.minimum) / (self.maximum - self.minimum)
-        return value
+            return 0.5 if isnan(value) else (value - self.minimum) / (self.maximum - self.minimum)
+        else:
+            return 0.0 if isnan(value) else value
 
-    # def denormalize(self, value):
-    #     if self.maximum > self.minimum:
-    #         return value * (self.maximum - self.minimum) + self.minimum
-    #     return value
+    def __str__(self):
+        return 'MinMaxStats(min={:.6f}, max={:.6f})'.format(self.minimum, self.maximum)
 
 
 def scalar_to_support(x_scalar, support_size):
