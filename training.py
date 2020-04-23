@@ -4,7 +4,7 @@ import tensorflow as tf
 import os
 
 
-def tensorboard_summary(model, line_length=100):
+def tensorboard_model_summary(model, line_length=100):
     lines = []
     model.summary(print_fn=lambda line: lines.append(line), line_length=line_length)
     lines.insert(3, '-'*line_length)
@@ -28,7 +28,7 @@ def evaluation_logger(summary_writer, step, evaluation_stats):
     if summary_writer:
         with summary_writer.as_default():
             for player, result in evaluation_stats.items():
-                tf.summary.scalar(name='Evaluation/{}'.format(player), data=result/20., step=step)
+                tf.summary.scalar(name='Evaluation/{}'.format(player), data=result, step=step)
 
 
 def self_play_logger(summary_writer, step, num_games, num_positions, num_unique):
@@ -42,6 +42,7 @@ def self_play_logger(summary_writer, step, num_games, num_positions, num_unique)
 def tensorboard_logger(config, checkpoint_path, network):
     if checkpoint_path:
         checkpoint_dir = os.path.join(checkpoint_path, config.name, timestamp())
+        checkpoint_prefix = os.path.join(checkpoint_dir, '{}_ckpt'.format(config.name))
         log_dir = os.path.join(checkpoint_dir, 'logs')
 
     #     # Graphs for all networks
@@ -55,25 +56,27 @@ def tensorboard_logger(config, checkpoint_path, network):
         with summary_writer.as_default():
             tf.summary.text(name='Configuration', data='| Key | Value |\n|-----|-------|\n' + '\n'.join(
                 '| {} | {} |'.format(key, value) for key, value in config.__dict__.items() if
-                key not in ['reward_loss', 'value_loss', 'visit_softmax_temperature_fn', 'action_space', 'game_class', 'network_class', 'game_params']), step=0)
+                key not in ['value_loss', 'reward_loss', 'optimizer', 'action_space', 'game_class', 'network_class', 'game_params']), step=0)
             tf.summary.text(name='Game parameters', data='| Key | Value |\n|-----|-------|\n' + '\n'.join(
-                '| {} | {} |'.format(key, value) for key, value in config.game_params.items() if
-                key not in []), step=0)
-            tf.summary.text(name='Networks/Representation', data=tensorboard_summary(network.representation), step=0)
-            tf.summary.text(name='Networks/Dynamics', data=tensorboard_summary(network.dynamics), step=0)
-            tf.summary.text(name='Networks/Prediction', data=tensorboard_summary(network.prediction), step=0)
+                '| {} | {} |'.format(key, value) for key, value in config.game_params.items()), step=0)
+            tf.summary.text(name='Networks/Representation', data=tensorboard_model_summary(network.representation), step=0)
+            tf.summary.text(name='Networks/Dynamics', data=tensorboard_model_summary(network.dynamics), step=0)
+            tf.summary.text(name='Networks/Prediction', data=tensorboard_model_summary(network.prediction), step=0)
     else:
-        checkpoint_dir = None
+        checkpoint_prefix = None
         summary_writer = None
-    return checkpoint_dir, summary_writer
+    return checkpoint_prefix, summary_writer
 
 
 def synchronous_train_network(config, network, num_games, num_steps, num_eval_games, checkpoint_path=None):
     replay_buffer = ReplayBuffer(config)
-    optimizer = tf.keras.optimizers.Adam(lr=config.learning_rate)
+    checkpoint = tf.train.Checkpoint(optimizer=config.optimizer,
+                                     representation=network.representation,
+                                     dynamics=network.dynamics,
+                                     prediction=network.prediction)
 
     # Tensorboard logging
-    checkpoint_dir, summary_writer = tensorboard_logger(config, checkpoint_path, network)
+    checkpoint_prefix, summary_writer = tensorboard_logger(config, checkpoint_path, network)
 
     # Actual training
     for step in range(config.training_steps):
@@ -85,8 +88,8 @@ def synchronous_train_network(config, network, num_games, num_steps, num_eval_ga
                              num_unique=replay_buffer.num_unique())
 
         if step % config.checkpoint_interval == 0:
-            if checkpoint_dir:
-                network.save_weights(os.path.join(checkpoint_dir, '{}_it{}'.format(config.name, step)))
+            if checkpoint_prefix:
+                checkpoint.save(checkpoint_prefix)
 
             if num_eval_games:
                 evaluation_stats = evaluate_against_random_agent(config, network, num_eval_games)
@@ -101,26 +104,32 @@ def synchronous_train_network(config, network, num_games, num_steps, num_eval_ga
             #         tf.summary.scalar(name='Learning rate', data=learning_rate, step=i)
 
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps, config.discount)
-        metrics = batch_update_weights(config, network, optimizer, batch)
+        metrics = batch_update_weights(config, network, config.optimizer, batch)
         loss_logger(summary_writer, step=step, metrics=metrics)
 
-    if checkpoint_dir:
-        network.save_weights(os.path.join(checkpoint_dir, '{}_it{}'.format(config.name, config.training_steps)))
+    if checkpoint_prefix:
+        checkpoint.save(checkpoint_prefix)
 
 
 def train_network(server_address, num_eval_games, tensorboard_logpath=None):
     client = MuZeroClient(server_address)
     config = client.config
     network = client.latest_network()
-    optimizer = tf.keras.optimizers.Adam(lr=config.learning_rate)
+    optimizer = config.optimizer
+
+    checkpoint = tf.train.Checkpoint(optimizer=optimizer,
+                                     representation=network.representation,
+                                     dynamics=network.dynamics,
+                                     prediction=network.prediction)
 
     # Tensorboard logging
-    tensorboard_logdir, summary_writer = tensorboard_logger(config, tensorboard_logpath, network)
-    print('Tensorboard logging in directory {}'.format(tensorboard_logdir))
+    checkpoint_prefix, summary_writer = tensorboard_logger(config, tensorboard_logpath, network)
 
     for step in range(config.training_steps):
         if step % config.checkpoint_interval == 0:
             client.save_network(network)
+            if checkpoint_prefix:
+                checkpoint.save(checkpoint_prefix)
 
             if num_eval_games:
                 evaluation_stats = evaluate_against_random_agent(config, network, num_eval_games)
@@ -156,7 +165,7 @@ def batch_update_weights(config, network, optimizer, batch):
         batch_images, batch_actions, batch_targets = map(np.array, zip(*batch))
         batch_targets = np.transpose(batch_targets, axes=(1, 0, 2))
 
-        batch_initial_inference = network.initial_inference(batch_images)
+        batch_initial_inference = network.initial_inference(batch_images, training=True)
 
         batch_predictions = [(1.,
                               batch_initial_inference.value,
@@ -168,7 +177,7 @@ def batch_update_weights(config, network, optimizer, batch):
         batch_hidden_state = batch_initial_inference.hidden_state
 
         for batch_action in batch_actions.T:
-            batch_recurrent_inference = network.recurrent_inference(batch_hidden_state, batch_action)
+            batch_recurrent_inference = network.recurrent_inference(batch_hidden_state, batch_action, training=True)
             batch_predictions.append((1./config.num_unroll_steps,
                                       batch_recurrent_inference.value,
                                       batch_recurrent_inference.reward,
@@ -199,10 +208,6 @@ def batch_update_weights(config, network, optimizer, batch):
                 toplay_loss_metric(toplay_loss)
                 loss += tf.math.reduce_mean(scale_gradient(reward_loss + toplay_loss, gradient_scale))/config.num_unroll_steps
 
-        # for weights in network.get_weights():
-        #     l2_regularization = config.weight_decay * tf.nn.l2_loss(weights)
-        #     regularization_metric(l2_regularization)
-        #     loss += l2_regularization
         l2_regularization = config.regularization_decay * sum(tf.nn.l2_loss(weights) for weights in network.get_weights())
         regularization_metric(l2_regularization)
         loss += l2_regularization
