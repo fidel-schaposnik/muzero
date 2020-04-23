@@ -8,7 +8,7 @@ E Lockhart, D. Hassabis, T. Graepel, T. Lillicrap, D. Silver,
 ["Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model"](https://arxiv.org/abs/1911.08265)
 
 **WARNING:** This code is highly experimental, badly documented and certainly buggy.
-Comments, questions and corrections are welcome.
+Comments, questions and corrections are welcome (forks and pull requests even more :-).
 
 ## Main differences with the algorithm described in [1]
 
