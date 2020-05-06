@@ -22,10 +22,11 @@ class MuZeroConfig:
                  discount,
                  freezing_moves,
                  root_dirichlet_alpha,
-                 root_exploration_noise,
+                 root_exploration_fraction,
                  max_moves,
                  game_class,
                  network_class,
+                 state_action_encoder,
                  action_space_size,
                  **game_params):
 
@@ -33,6 +34,7 @@ class MuZeroConfig:
         self.name = name
         self.game_class = game_class
         self.network_class = network_class
+        self.state_action_encoder = state_action_encoder
         self.action_space_size = action_space_size
         self.action_space = [Action(i) for i in range(action_space_size)]
         self.game_params = game_params
@@ -43,7 +45,7 @@ class MuZeroConfig:
         self.discount = discount
         self.freezing_moves = freezing_moves
         self.root_dirichlet_alpha = root_dirichlet_alpha
-        self.root_exploration_fraction = root_exploration_noise
+        self.root_exploration_fraction = root_exploration_fraction
         self.max_moves = max_moves
 
         # Training parameters
@@ -75,7 +77,7 @@ class MuZeroConfig:
         return self.game_class(**self.game_params)
 
     def make_uniform_network(self):
-        return self.network_class(**self.game_params)
+        return self.network_class(state_action_encoder=self.state_action_encoder, **self.game_params)
 
     def exploration_function(self, parent_simulations, child_simulations):
         return sqrt(parent_simulations)/(child_simulations + 1)

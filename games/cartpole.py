@@ -31,10 +31,11 @@ def make_config(window_size=int(1e3), batch_size=2048,
                         discount=0.99,
                         freezing_moves=20,
                         root_dirichlet_alpha=0.25,
-                        root_exploration_noise=0.1,
+                        root_exploration_fraction=0.25,
                         max_moves=500,
                         game_class=CartPoleGame,
                         network_class=CartPoleNetwork,
+                        state_action_encoder=BinaryPlaneEncoder(),
                         action_space_size=2,
                         num_layers=num_layers, num_units=num_units,
                         policy_filters=policy_filters, policy_kernel_size=policy_kernel_size,
@@ -101,7 +102,7 @@ class CartPoleNetwork(Network):
     Neural networks for cart-pole game.
     """
 
-    def __init__(self,
+    def __init__(self, state_action_encoder,
                  num_layers, num_units,  # Fully connected network parameters
                  policy_filters, policy_kernel_size,  # Policy head parameters
                  value_filters, value_kernel_size,  # Value head parameters
@@ -128,7 +129,7 @@ class CartPoleNetwork(Network):
             - batch_value:                              (batch_size, num_players=1)
         """
 
-        super().__init__()
+        super().__init__(state_action_encoder=state_action_encoder)
 
         self.representation = fully_connected_representation_network(name='CPRep', input_shape=(5,),
                                                                      num_layers=num_layers, num_units=num_units)
@@ -143,6 +144,8 @@ class CartPoleNetwork(Network):
                                                              policy_filters=policy_filters, policy_kernel_size=policy_kernel_size,
                                                              value_filters=value_filters, value_kernel_size=value_kernel_size, value_hidden_size=hidden_size)
 
+        self.state_action_encoding = state_action_encoder
+
         self.trainable_variables = []
         for sub_network in [self.representation, self.dynamics, self.prediction]:
             self.trainable_variables.extend(sub_network.trainable_variables)
@@ -156,13 +159,3 @@ class CartPoleNetwork(Network):
         output_shape = list(self.dynamics.output_shape[-1])
         output_shape[0] = batch_size
         return tuple(output_shape)
-
-    def state_action_encoding(self, batch_hidden_state, batch_action):
-        # Encode action as binary planes
-        batch_encoded_action = np.zeros_like(batch_hidden_state)
-        for i, action in enumerate(batch_action):
-            batch_encoded_action[i] = action.index
-
-        # Concatenate action to hidden state
-        batch_dynamics_input = tf.concat([batch_hidden_state, batch_encoded_action], axis=-1)
-        return batch_dynamics_input

@@ -24,23 +24,24 @@ def make_config(window_size=int(1e3), batch_size=2048,
                         td_steps=9,
                         training_steps=training_steps,
                         checkpoint_interval=checkpoint_interval,
-                        learning_rate=.001,
+                        optimizer=tf.keras.optimizers.SGD(lr=.01, momentum=0.9),
                         num_simulations=num_simulations,
                         known_bounds=None,
-                        discount=0.9,
-                        freezing_moves=10,
+                        discount=1,
+                        freezing_moves=4,
                         root_dirichlet_alpha=0.25,
-                        root_exploration_noise=0.1,
+                        root_exploration_fraction=0.25,
                         max_moves=9,
                         game_class=TicTacToeGame,
                         network_class=TicTacToeNetwork,
+                        state_action_encoder=OneHotPlaneEncoder(rows=3, cols=3, action_space_size=9),
                         action_space_size=9,
                         conv_filters=conv_filters, conv_kernel_size=conv_kernel_size, tower_height=tower_height,
                         policy_filters=policy_filters, policy_kernel_size=policy_kernel_size,
                         value_filters=value_filters, value_kernel_size=value_kernel_size,
                         reward_filters=reward_filters, reward_kernel_size=reward_kernel_size,
                         toplay_filters=toplay_filters, toplay_kernel_size=toplay_kernel_size,
-                        hidden_size=hidden_size
+                        hidden_size=hidden_size, scalar_activation='tanh'
                         )
 
 
@@ -124,7 +125,7 @@ class TicTacToeGame(Game):
         self.history.observations.append(self.make_image())
 
     def state_repr(self, state_index=-1):
-        board = self.history.observations[state_index][:,:,0]-self.history.observations[state_index][:,:,1]
+        board = self.history.observations[state_index][:, :, 0]-self.history.observations[state_index][:, :, 1]
         colors = {0: '.', 1: 'X', -1: 'O'}
         result = ''
         for i in range(3):
@@ -142,55 +143,51 @@ class TicTacToeNetwork(Network):
     Neural networks for tic-tac-toe game.
     """
 
-    def __init__(self,
+    def __init__(self, state_action_encoder,
                  conv_filters, conv_kernel_size, tower_height,  # Residual tower parameters
                  policy_filters, policy_kernel_size,  # Policy head parameters
                  value_filters, value_kernel_size,  # Value head parameters
                  reward_filters, reward_kernel_size,  # Reward head parameters
                  toplay_filters, toplay_kernel_size,  # To-play head parameters
-                 hidden_size,  # For value and reward heads
+                 hidden_size, scalar_activation,  # For value and reward heads
                  **kwargs  # Collects other parameters not used here (mostly for game definition)
                  ):
         """
-        Initial inference:
-            Observation batch:          (batch_size, 3, 3, num_players=2).
-            Representation output:      (batch_size, 3, 3, conv_filters)
-            Prediction outputs:
-                - batch_policy_logits:  (batch_size, action_space_size=9)
-                - batch_value:          (batch_size, num_players=2)
+        Representation input (observation batch):       (batch_size, 3, 3, num_players=2).
+        Representation output (hidden state batch):     (batch_size, 3, 3, conv_filters)
 
-        Recurrent inference:
-            Hidden state batch shape:   (batch_size, 3, 3, conv_filters)
-            Encoded action batch shape: (batch_size, 3, 3, action_space_size=9)
-            Dynamics input:             (batch_size, 3, 3, conv_filters+9)
-            Dynamics outputs:
-                - batch_hidden_state:   (batch_size, 3, 3, conv_filters)
-                - batch_reward:         (batch_size, num_players=2)
-                - batch_toplay:         (batch_size, num_players=2)
-            Prediction input:           (batch_size, 3, 3, conv_filters)
-            Prediction outputs:
-                - batch_policy_logits:  (batch_size, action_space_size=9)
-                - batch_value:          (batch_size, num_players=2)
+        Encoded action batch:                           (batch_size, 3, 3, action_space_size=9)
+
+        Dynamics input:                                 (batch_size, 3, 3, conv_filters+action_space_size=9)
+        Dynamics outputs:
+            - batch_hidden_state:                       (batch_size, 3, 3, conv_filters)
+            - batch_reward:                             (batch_size, num_players=2)
+            - batch_toplay:                             (batch_size, num_players=2)
+
+        Prediction input:                               (batch_size, 3, 3, conv_filters)
+        Prediction outputs:
+            - batch_policy_logits:                      (batch_size, action_space_size=9)
+            - batch_value:                              (batch_size, num_players=2)
         """
 
-        super().__init__()
-        self.encoded_action_space = np.zeros((9, 3, 3, 9)).astype(np.float32)
-        for i in range(9):
-            self.encoded_action_space[i, :, :, i] = 1
-
+        super().__init__(state_action_encoder=state_action_encoder)
         self.representation = representation_network(name='TTTRep', input_shape=(3, 3, 2),
                                                      tower_height=tower_height, conv_filters=conv_filters, conv_kernel_size=conv_kernel_size)
         # self.representation = dummy_network(name='TTTRep', input_shape=(3, 3, 2), conv_filters=conv_filters)
 
         self.dynamics = dynamics_network(name='TTTDyn', input_shape=(3, 3, conv_filters + 9), num_players=2,
                                          tower_height=tower_height, conv_filters=conv_filters, conv_kernel_size=conv_kernel_size,
-                                         reward_filters=reward_filters, reward_kernel_size=reward_kernel_size, reward_hidden_size=hidden_size,
+                                         reward_filters=reward_filters, reward_kernel_size=reward_kernel_size,
+                                         reward_hidden_size=hidden_size, scalar_activation=scalar_activation,
                                          toplay_filters=toplay_filters, toplay_kernel_size=toplay_kernel_size)
 
         self.prediction = prediction_network(name='TTTPre', input_shape=(3, 3, conv_filters), num_logits=9, num_players=2,
                                              tower_height=tower_height, conv_filters=conv_filters, conv_kernel_size=conv_kernel_size,
                                              policy_filters=policy_filters, policy_kernel_size=policy_kernel_size,
-                                             value_filters=value_filters, value_kernel_size=value_kernel_size, value_hidden_size=hidden_size)
+                                             value_filters=value_filters, value_kernel_size=value_kernel_size,
+                                             value_hidden_size=hidden_size, scalar_activation=scalar_activation)
+
+        self.state_action_encoding = state_action_encoder
 
         self.trainable_variables = []
         for sub_network in [self.representation, self.dynamics, self.prediction]:
@@ -205,11 +202,3 @@ class TicTacToeNetwork(Network):
         output_shape = list(self.dynamics.output_shape[-1])
         output_shape[0] = batch_size
         return tuple(output_shape)
-
-    def state_action_encoding(self, batch_hidden_state, batch_action):
-        # Encode action as binary planes
-        batch_encoded_action = self.encoded_action_space[[action.index for action in batch_action]]
-
-        # Concatenate action to hidden state
-        batch_dynamics_input = tf.concat([batch_hidden_state, batch_encoded_action], axis=-1)
-        return batch_dynamics_input

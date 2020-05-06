@@ -3,13 +3,13 @@ from network import *
 from config import *
 
 
-def make_config(window_size=int(1e3), batch_size=2048,
-                training_steps=int(1e4), checkpoint_interval=int(1e2), num_simulations=21,
-                conv_filters=64, conv_kernel_size=(3, 3), tower_height=8,  # Residual tower parameters
+def make_config(window_size=int(1e4), batch_size=512,
+                training_steps=int(1e5), checkpoint_interval=int(5e2), num_simulations=21,
+                conv_filters=64, conv_kernel_size=(3, 3), tower_height=5,  # Residual tower parameters
                 policy_filters=64, policy_kernel_size=(3, 3),  # Policy sub-network parameters
                 value_filters=64, value_kernel_size=(3, 3),  # Value sub-network parameters
                 reward_filters=64, reward_kernel_size=(3, 3),  # Reward sub-network parameters
-                toplay_filters=64, toplay_kernel_size=(6, 6),  # To-play sub-network parameters
+                toplay_filters=64, toplay_kernel_size=(3, 3),  # To-play sub-network parameters
                 hidden_size=128,  # Parameters shared by value and reward sub-networks
                 width=7,  # Board width
                 height=6,  # Board height
@@ -26,16 +26,17 @@ def make_config(window_size=int(1e3), batch_size=2048,
                         td_steps=width * height,
                         training_steps=training_steps,
                         checkpoint_interval=checkpoint_interval,
-                        optimizer=tf.keras.optimizers.SGD(lr=.001, momentum=0.9),
+                        optimizer=tf.keras.optimizers.SGD(lr=.01, momentum=0.9),
                         num_simulations=num_simulations,
-                        known_bounds=(-1, 1),
+                        known_bounds=None,
                         discount=1,
                         freezing_moves=20,
-                        root_dirichlet_alpha=0.25,
-                        root_exploration_noise=0.1,
+                        root_dirichlet_alpha=1.00,
+                        root_exploration_fraction=0.25,
                         max_moves=width * height,
                         game_class=ConnectXGame,
                         network_class=ConnectXNetwork,
+                        state_action_encoder=OneHotPlaneEncoder(rows=height, cols=width, action_space_size=width),
                         action_space_size=width,
                         conv_filters=conv_filters, conv_kernel_size=conv_kernel_size, tower_height=tower_height,
                         policy_filters=policy_filters, policy_kernel_size=policy_kernel_size,
@@ -155,7 +156,7 @@ class ConnectXNetwork(Network):
     Neural networks for connect-x game.
     """
 
-    def __init__(self,
+    def __init__(self, state_action_encoder,
                  conv_filters, conv_kernel_size, tower_height,  # Residual tower parameters
                  policy_filters, policy_kernel_size,  # Policy head parameters
                  value_filters, value_kernel_size,  # Value head parameters
@@ -183,11 +184,7 @@ class ConnectXNetwork(Network):
             - batch_value:                              (batch_size, num_players=2)
         """
 
-        super().__init__()
-        self.encoded_action_space = np.zeros((width, height, width, width)).astype(np.float32)
-        for i in range(width):
-            self.encoded_action_space[i, :, :, i] = 1
-
+        super().__init__(state_action_encoder=state_action_encoder)
         # self.representation = representation_network(name='ConXRep', input_shape=(height, width, 2),
         #                                              tower_height=tower_height, conv_filters=conv_filters, conv_kernel_size=conv_kernel_size)
         self.representation = dummy_network(name='ConXRep', input_shape=(height, width, 2), conv_filters=conv_filters)
@@ -209,6 +206,8 @@ class ConnectXNetwork(Network):
                                              value_filters=value_filters, value_kernel_size=value_kernel_size,
                                              value_hidden_size=hidden_size, scalar_activation=scalar_activation)
 
+        self.state_action_encoding = state_action_encoder
+
         self.trainable_variables = []
         for sub_network in [self.representation, self.dynamics, self.prediction]:
             self.trainable_variables.extend(sub_network.trainable_variables)
@@ -222,11 +221,3 @@ class ConnectXNetwork(Network):
         output_shape = list(self.dynamics.output_shape[-1])
         output_shape[0] = batch_size
         return tuple(output_shape)
-
-    def state_action_encoding(self, batch_hidden_state, batch_action):
-        # Encode action as binary planes
-        batch_encoded_action = self.encoded_action_space[[action.index for action in batch_action]]
-
-        # Concatenate action to hidden state
-        batch_dynamics_input = tf.concat([batch_hidden_state, batch_encoded_action], axis=-1)
-        return batch_dynamics_input

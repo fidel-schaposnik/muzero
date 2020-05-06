@@ -1,6 +1,9 @@
 from environment import *
 from utils import *
-import time
+import time, os, grpc
+from tensorflow_serving.apis import predict_pb2
+from tensorflow_serving.apis import prediction_service_pb2_grpc
+from tensorflow_serving.apis import get_model_metadata_pb2
 
 
 def residual_block(name, inputs, num_filters, kernel_size):
@@ -25,7 +28,7 @@ def residual_tower(name, inputs, num_filters, kernel_size, height):
 
 def logits_head(name, inputs, num_logits, num_filters, kernel_size):
     x = tf.keras.layers.Conv2D(num_filters, kernel_size, padding='same', name=name + '_conv')(inputs)
-    x = tf.keras.layers.BatchNormalization(name=name + '_norm')(x)
+    # x = tf.keras.layers.BatchNormalization(name=name + '_norm')(x)
     x = tf.keras.layers.Activation('relu', name=name + '_relu')(x)
     x = tf.keras.layers.Flatten(name=name + '_flatten')(x)
     x = tf.keras.layers.Dense(num_logits, name=name + '_dense', activation='relu')(x)
@@ -187,7 +190,7 @@ def fully_connected_dynamics_network(name, input_shape, num_players,
 
     hidden_state = fully_connected_network(name=name+'_fcn', inputs=inputs, num_layers=num_layers, num_units=num_units)
 
-    hidden_state = tf.keras.layers.Reshape(target_shape=(num_units,1,1), name=name+'_hidden_state')(hidden_state)
+    hidden_state = tf.keras.layers.Reshape(target_shape=(num_units, 1, 1), name=name+'_hidden_state')(hidden_state)
 
     reward_output = scalar_head(name=name + '_reward', inputs=hidden_state,
                                 num_outputs=num_players, scalar_activation=scalar_activation,
@@ -214,7 +217,37 @@ def fully_connected_representation_network(name, input_shape, num_layers, num_un
     return tf.keras.Model(inputs=inputs, outputs=outputs, name=name)
 
 
-class NetworkOutput(object):
+class OneHotPlaneEncoder:
+    """
+    Encode a batch of actions as one-hot planes, then concatenate with hidden-state batch.
+    """
+    def __init__(self, rows, cols, action_space_size):
+        self.encoded_action_space = np.zeros((action_space_size, rows, cols, action_space_size)).astype(np.float32)
+        for i in range(action_space_size):
+            self.encoded_action_space[i, :, :, i] = 1
+
+    def __call__(self, batch_hidden_state, batch_action):
+        batch_encoded_action = self.encoded_action_space[[action.index for action in batch_action]]
+        batch_dynamics_input = tf.concat([batch_hidden_state, batch_encoded_action], axis=-1)
+        return batch_dynamics_input
+
+
+class BinaryPlaneEncoder:
+    """
+    Encode actions as binary planes, append these to the hidden-state batch.
+    """
+    def __call__(self, batch_hidden_state, batch_action):
+        # Encode action as binary planes
+        batch_encoded_action = np.zeros_like(batch_hidden_state)
+        for i, action in enumerate(batch_action):
+            batch_encoded_action[i] = action.index
+
+        # Concatenate action to hidden state
+        batch_dynamics_input = tf.concat([batch_hidden_state, batch_encoded_action], axis=-1)
+        return batch_dynamics_input
+
+
+class NetworkOutput:
     def __init__(self, value, reward, policy_logits, hidden_state, to_play, inv_scalar_transformation):
         self.value = value
         self.reward = reward
@@ -242,11 +275,12 @@ class Network:
     Base class for all of MuZero neural networks.
     """
 
-    def __init__(self):
+    def __init__(self, state_action_encoder):
         self.steps = 0
         self.representation = None
         self.dynamics = None
         self.prediction = None
+        self.state_action_encoder = state_action_encoder
         self.inv_scalar_transformation = lambda x: x
 
         self.REPRESENTATION_TIME = 0.
@@ -285,6 +319,14 @@ class Network:
         self.dynamics.load_weights(filepath_prefix + '_dyn.h5')
         self.prediction.load_weights(filepath_prefix + '_pre.h5')
 
+    def save_model(self, filepath_prefix):
+        """
+        Export the network models to SavedModel format.
+        """
+        tf.saved_model.save(self.representation, os.path.join(filepath_prefix, 'representation', str(self.steps)))
+        tf.saved_model.save(self.dynamics, os.path.join(filepath_prefix, 'dynamics', str(self.steps)))
+        tf.saved_model.save(self.prediction, os.path.join(filepath_prefix, 'prediction', str(self.steps)))
+
     def summary(self):
         """
         Print summaries for all the neural networks we use.
@@ -301,12 +343,6 @@ class Network:
 
     def toplay_shape(self, batch_size=None):
         raise ImplementationError('toplay_shape', 'Network')
-
-    def state_action_encoding(self, batch_hidden_state, batch_action):
-        """
-        Encode a batch of hidden states and actions in a form suitable for being input to the dynamics network.
-        """
-        raise ImplementationError('state_action_encoding', 'Network')
 
     def initial_inference(self, batch_image, training=False):
         """
@@ -334,7 +370,7 @@ class Network:
         Apply the dynamics + prediction networks to a batch of hidden states.
         """
         start = time.time()
-        batch_dynamics_input = self.state_action_encoding(batch_hidden_state, batch_action)
+        batch_dynamics_input = self.state_action_encoder(batch_hidden_state, batch_action)
         end = time.time()
         self.ENCODING_TIME += end-start
 
@@ -362,3 +398,41 @@ class Network:
                           'output_shape': model.output_shape}
              for model in [self.representation, self.dynamics, self.prediction]},
             self.training_steps())
+
+
+class RemoteNetwork(Network):
+    def __init__(self, state_action_encoder, host, port, timeout=5.0):
+        super().__init__(state_action_encoder)
+        channel = grpc.insecure_channel('{}:{}'.format(host, port))
+        self.prediction_service = prediction_service_pb2_grpc.PredictionServiceStub(channel)
+        self.timeout = timeout
+
+        self.representation_io = self.get_io('representation')
+        self.representation = lambda observation: self.gRPC('representation', self.representation_io, observation)[0]
+
+        self.dynamics_io = self.get_io('dynamics')
+        self.dynamics = lambda encoded_state_action: self.gRPC('dynamics', self.dynamics_io, encoded_state_action)
+
+        self.prediction_io = self.get_io('prediction')
+        self.prediction = lambda hidden_state_batch: self.gRPC('prediction', self.prediction_io, hidden_state_batch)
+
+    def get_io(self, sub_network):
+        metadata_request = get_model_metadata_pb2.GetModelMetadataRequest()
+        metadata_request.model_spec.name = sub_network
+        metadata_request.metadata_field.append("signature_def")
+        result = self.prediction_service.GetModelMetadata(metadata_request, self.timeout)
+
+        signature_def_map = get_model_metadata_pb2.SignatureDefMap()
+        result.metadata['signature_def'].Unpack(signature_def_map)
+        default_signature_def = signature_def_map.signature_def['serving_default']
+        return list(default_signature_def.inputs.keys()), list(default_signature_def.outputs.keys())
+
+    def gRPC(self, sub_network, inputs_outputs, tensor):
+        inputs, outputs = inputs_outputs
+        request = predict_pb2.PredictRequest()
+        request.model_spec.name = sub_network
+        request.inputs[inputs[0]].CopyFrom(tf.make_tensor_proto(tensor))
+
+        response = self.prediction_service.Predict(request, self.timeout)
+
+        return [tf.make_ndarray(response.outputs[output]) for output in outputs]
