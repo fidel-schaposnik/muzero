@@ -51,12 +51,24 @@ def play_against_network(config, network, human_player_id=None, verbose=True):
     game = config.new_game()
     while not game.terminal() and len(game.history) < config.max_moves:
         if game.environment.to_play().player_id == human_player_id:
-            action = Action(int(input('Input your action: ')))
+            action = None
+            while not action or action not in config.action_space:
+                try:
+                    action = Action(int(input('Input your action: ')))
+                except ValueError:
+                    continue
             game.apply(action)
         else:
+            if verbose:
+                network_output = network.initial_inference(np.array([game.make_image()]))
+                mask = np.zeros(config.action_space_size)
+                for action in game.legal_actions():
+                    mask[action.index] = 1
+                print('MuZero prior policy: {}'.format(tf.keras.layers.Softmax()(mask * network_output.policy_logits)))
+                print('MuZero expected value: {}'.format(network_output.value))
             batch_make_move(config, network, [game], training=False)
             if verbose:
-                print('MuZero policy: {}'.format(game.history.policies[-1]))
+                print('MuZero MCTS policy: {}'.format(game.history.policies[-1]))
                 print('MuZero plays: {}'.format(game.history.actions[-1].index))
         if verbose:
             print('Reward: {}'.format(game.history.rewards[-1]))
