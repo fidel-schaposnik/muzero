@@ -1,5 +1,4 @@
-from storage_replay import *
-from environment import *
+from environment import Action
 
 
 class GameHistory:
@@ -7,12 +6,7 @@ class GameHistory:
     Book-keeping class for completed games.
     """
 
-    def __init__(self, action_space_size, num_players):
-        self.action_space_size = action_space_size
-        self.uniform_policy = [1 / action_space_size for _ in range(action_space_size)]
-        self.players = [Player(i) for i in range(num_players)]
-        self.action_list_hash = None
-
+    def __init__(self):
         self.observations = []
         self.actions = []
         self.rewards = []
@@ -26,44 +20,32 @@ class GameHistory:
     def __len__(self):
         return len(self.actions)
 
+    def compute_target_value(self, index, td_steps, discount):
+        bootstrap_index = index + td_steps
+        if bootstrap_index < len(self.root_values):
+            value = self.root_values[bootstrap_index] * discount ** td_steps
+        else:
+            value = 0
+
+        for i, reward in enumerate(self.rewards[index:bootstrap_index]):
+            sign = 1 if self.to_plays[index+i] == self.to_plays[index] else -1
+            value += sign * reward * discount ** i
+        return value
+
     def make_target(self, state_index, num_unroll_steps, td_steps, discount):
         targets = []
         for current_index in range(state_index, state_index + num_unroll_steps + 1):
-            bootstrap_index = current_index + td_steps
-            if bootstrap_index < len(self.root_values):
-                value_dict = self.root_values[bootstrap_index]
+            value = self.compute_target_value(current_index, td_steps, discount)
+
+            if 0 < current_index <= len(self.rewards):
+                last_reward = self.rewards[current_index - 1]
             else:
-                value_dict = {player: 0.0 for player in self.players}
-            for player, value in value_dict.items():
-                value_dict[player] = value * discount ** td_steps
-
-            for i, reward_dict in enumerate(self.rewards[current_index:bootstrap_index]):
-                for player, reward in reward_dict.items():
-                    value_dict[player] = value_dict.get(player, 0.0) + reward * discount ** i
-
-            # # For simplicity the network always predicts the most recently received
-            # # reward, even for the initial representation network where we already
-            # # know this reward.
-            # if current_index > 0 and current_index <= len(self.rewards):
-            #     last_reward = self.rewards[current_index - 1]
-            # else:
-            #     last_reward = self.no_value
-
-            if current_index == state_index:
-                last_reward = None
-                to_play = None
-            else:
-                last_reward = [self.rewards[current_index-1].get(player, 0.0) for player in self.players]
-                to_play = self.to_plays[current_index-1].player_id
+                last_reward = 0
 
             if current_index < len(self.root_values):
-                targets.append(([value_dict.get(player, 0.0) for player in self.players],
-                                last_reward,
-                                self.policies[current_index],
-                                to_play))
+                targets.append((value, last_reward, self.policies[current_index]))
             else:
-                # States past the end of games are treated as absorbing states.
-                targets.append(([0.0]*len(self.players), last_reward, self.uniform_policy, to_play))
+                targets.append((value, last_reward, [1/len(self.policies[-1])]*len(self.policies[-1])))
         return targets
 
 
@@ -74,7 +56,7 @@ class Game:
 
     def __init__(self, environment):
         self.environment = environment
-        self.history = GameHistory(action_space_size=environment.action_space_size, num_players=environment.num_players)
+        self.history = GameHistory()
 
     def to_play(self):
         return self.environment.to_play()
@@ -92,20 +74,18 @@ class Game:
         reward = self.environment.step(action)
         self.history.observations.append(self.make_image())
         self.history.actions.append(action)
-        self.history.rewards.append({player: reward.get(player, 0.0) for player in self.environment.players()})
+        self.history.rewards.append(reward)
         self.history.to_plays.append(self.to_play())
 
     def store_search_statistics(self, root):
         action_space = map(Action, range(self.environment.action_space_size))
         self.history.policies.append([
-            root.children[a].num_simulations / root.num_simulations if a in root.children else 0 for a in action_space
+            root.children[a].visit_count / root.visit_count if a in root.children else 0 for a in action_space
         ])
-        self.history.root_values.append(
-            {player: root.value_dict_sum.get(player, 0.0)/root.num_simulations for player in self.environment.players()}
-        )
+        self.history.root_values.append(float(root.value()))
 
     def make_image(self):
         """
-        Encode the state representation (returned by environment.get_state) into an np.array.
+        If necessary, encode the state representation (returned by environment.get_state) into an np.array.
         """
-        raise ImplementationError('make_image', 'Game')
+        return self.environment.get_state()

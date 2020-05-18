@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package tensorflow;
+
+import "tensorflow/core/framework/tensor.proto";
+
+service ReplayBuffer {
+  rpc Stats(Empty) returns (StatsResponse) {}
+  rpc SaveGame(GameHistory) returns (SaveGameResponse) {}
+  rpc SampleBatch(MiniBatchRequest) returns (MiniBatchResponse) {}
+}
+
+message Empty {}
+
+message StatsResponse {
+  map<string, int32> metrics = 1;
+}
+
+message Policy {
+  repeated float probabilities = 1;
+}
+
+message GameHistory {
+  repeated TensorProto observations = 1;
+  repeated int32 actions = 2;
+  repeated float rewards =3;
+  repeated int32 to_plays = 4;
+  repeated float root_values = 5;
+  repeated Policy policies = 6;
+}
+
+message SaveGameResponse {
+  bool success = 1;
+}
+
+message MiniBatchRequest {
+  int32 batch_size = 1;
+  int32 num_unroll_steps = 2;
+  int32 td_steps = 3;
+  float discount = 4;
+}
+
+message MiniBatchResponse {
+  message DataPoint {
+    TensorProto observation = 1;
+    repeated int32 actions = 2;
+
+    message DataPointTarget {
+      float value = 1;
+      float reward = 2;
+      Policy policy = 3;
+    }
+    repeated DataPointTarget targets = 3;
+  }
+  repeated DataPoint datapoints = 1;
+}

@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package tensorflow.muzero;
+
+import "tensorflow/core/framework/tensor.proto";
+
+service RemoteEnvironment {
+  rpc Initialization(InitializationRequest) returns (InitializationResponse) {}
+  rpc Step(ActionRequest) returns (ActionResponse) {}
+}
+
+message State {
+	TensorProto observation = 1;
+	int32 to_play = 2;
+	repeated int32 legal_actions = 3;
+}
+
+message InitializationRequest {
+	map<string, int32> environment_parameters = 1;
+}
+
+message InitializationResponse {
+	int32 environment_id = 1;
+	int32 action_space_size = 2;
+	int32 num_players  = 3;
+	State state = 4;
+}
+
+message ActionRequest {
+	int32 environment_id = 1;
+	int32 index = 2;
+}
+
+message ActionResponse {
+	bool success = 1;
+	float reward = 2;
+	State state = 3;
+	bool done = 5;
+}

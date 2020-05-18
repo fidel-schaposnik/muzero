@@ -8,104 +8,88 @@ E Lockhart, D. Hassabis, T. Graepel, T. Lillicrap, D. Silver,
 ["Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model"](https://arxiv.org/abs/1911.08265)
 
 **WARNING:** This code is highly experimental, badly documented and certainly buggy.
-Comments, questions and corrections are welcome (forks and pull requests even more :-).
+Comments, questions and corrections are welcome.
 
-## Main differences with the algorithm described in [1]
+## Design
 
-Some changes have been made in the direction of supporting multi-player games:
+This implementation isolates the various components of MuZero, and uses
+ gRPC for communication between them. This should make it straightforward
+to deploy the algorithm in the cloud and scale the resources up to the point
+required for solving more complex games.
 
-- **More flexibility in the environment responses:** after each move all players can receive
-  rewards (not just the player who made that move).
+The main components are:
+
+- An environment server.
+
+- A replay buffer, storing the self-played games and producing from them
+the training batches.
+
+- A network server, performing the neural network evaluations required during
+self-play (provided by `tensorflow-serving`).
+
+- A Monte-Carlo Tree-Search agent, playing games using the latest networks available.
+
+- A training agent, using the self-played games to train the networks and improve
+gameplay.
+
+## Usage
+
+Follow these steps to train MuZero to play a given game:
+
+1. Start an environment server using
+`python environment.py --game GAME --port PORT`,
+where `GAME` is one of the games implemented in the `games` directory 
+and `PORT` is the port for gRPC communication, e.g. 50000.
+
+1. Start a replay buffer server using
+`python replay_buffer.py --game GAME --port PORT`,
+where `GAME` is one of the games implemented in the `games` directory 
+and `PORT` is the port for gRPC communication, e.g. 50001.
  
-- **An additional head in the dynamics function** predicts who is the next player to play.
+1. Start the `tensorflow-serving` neural network server in a Docker container using
+`docker run -t --rm -p PORT:8500 -p HTTP_PORT:8501 --mount type=bind,source=$PWD/models,target=/models --name muzero_tfserver tensorflow/serving --model_config_file=/models/models.config --enable_batching --batching_parameters_file=/models/batching.config --monitoring_config_file=/models/monitoring.config`,
+where `PORT` is the port for gRPC communication, e.g. 50002, and `HTTP_PORT`
+is the port for HTTP communication (to see information about the networks or 
+obtain tensorflow-serving metrics).
 
-Additionally, a simplified UCB formula is used to reduce the number of hyperparameters.
+1. Start the training agent using
+`python training.py --game GAME --replay_buffer REPLAY_IP:PORT --min_games MIN_GAMES --saved_models_path $PWD\models --logging_path $PWD\logs`,
+where `GAME` is one of the games implemented in the `games` directory,
+`REPLAY_IP:PORT` point to the replay buffer server of step 2, and `MIN_GAMES`
+is the minimum number of games in the replay buffer before training starts. 
 
-## Training modes
-
-Support for single-thread training (_synchronous mode_) and multi-thread or distributed 
-training (_asynchronous mode_).
-
-#### Synchronous mode
-
-In this mode a single thread plays games to generate training data, and then uses this 
-data to train the neural networks. This is slower but easier to setup than asynchronous 
-training (as used in the original paper). Use
-
-`python muzero.py --game GAME --synchronous --num-steps NUM_STEPS --num-games NUM_GAMES --num-eval-games NUM_EVAL_GAMES`
-
-to alternate self-playing `NUM_GAMES` games, and training for `NUM_STEPS` steps. At each 
-checkpoint, `NUM_EVAL_GAMES` are played to evaluate the network.
-
-#### Asynchronous mode
-
-In this mode self-playing and training occur simultaneously in different processes or 
-different nodes of a distributed network. A simple HTTP server maintains a database of 
-self-played games and neural network weights. Self-playing and training agents interact 
-with this server through a simple API.
-
-- Use  `python muzero.py --game GAME --server DATA_DIR` to start the server and save logs in 
- `DATA_DIR`(network weights are saved in [HDF5 format](http://www.h5py.org/), self-play 
- games are pickled). You can then go to http://localhost:5000/ to see basic server 
- statistics.
-
-- Use `python muzero.py --client HOST --self-play NUM_GAMES` to start a self-playing agent
- that uses the latest network from the server `HOST` to generate batches of `NUM_GAMES` 
- games and send them back to the server.
- 
-- Use `python muzero.py --client HOST --train NUM_EVAL_GAMES` to start a training agent 
- that queries the server at `HOST` for batches of training data, and uses them to train 
- the latest network. At each checkpoint, `NUM_EVAL_GAMES` are played to evaluate the network.
-
-By default, the server is only visible locally. Change `api.run()` to `api.run(0.0.0.0)` in
-`storage_replay.py` to make the server visible to the outside
-
-**WARNING:** the API is implemented using [Flask](https://flask.palletsprojects.com/), and it is not recommended to deploy it as is 
-for production. 
+1. Start one or more self-playing agents using
+`python agent.py --game GAME --environment ENVIRONMENT_IP:PORT --replay_buffer REPLAY_IP:PORT --network NETWORK_IP:PORT --num_games NUM_GAMES`,
+where the `IP:PORT` pairs point to the servers of steps 1-3.
 
 ## Currently implemented games:
 
 The following games have already been implemented (though only partial experiments 
 have been carried out with them):
 
-- [CartPole-v0](https://github.com/openai/gym/wiki/CartPole-v0) (`games/cartpole.py`)
-- Tic-tac-toe (`games/tictactoe.py`)
-- One-arm bandit (`games/onearmbandit.py`)
+- [CartPole](https://github.com/openai/gym/wiki/CartPole-v0) (`games/cartpole.py`)
 
-You can run MuZero on any of these games by using the `--game` command-line 
-argument with the corresponding filename, e.g. `--game tictactoe`.
- 
+#### Implementing other games
 
-## Other features
+To implement a new game, you should sub-class the `Environment` class 
+defined in `environment.py`, see `games/cartpole.py` for an example. In 
+the `games/yourgame.py` file you should also sub-class the `Network` class 
+defined in `network.py` to define the neural networks used by MuZero for
+your game. Finally, you should also provide a `make_config` method returning a
+`MuZeroConfig` object (defined in `config.py`), containing all the
+configuration parameters required by MuZero.
 
-- **Tensorboard logging:** on the base directory use `tensorboard --logdir checkpoints` 
-to visualize training.
+Alternatively, you may altogether skip creating an `Environment` sub-class
+and simply define an environment server communicating through gRPC following
+`protos/environment.proto`.
 
-- **Easily add games**: just add a file to the `games` directory defining MuZero's
-configuration for the game of your choice, and implementing sub-classes for the 
-`Environment`, `Game` and `Network` classes. The methods you need to implement 
-for each subclass are marked in `environment.py`, `game.py` and `network.py`, 
-respectively. **NOTE:** It should be trivial to interface with [OpenAI Gym](https://gym.openai.com/)
-environments, see `games/cartpole.py` for an example.
+## Custom training loops
 
-- **Loss selection:** you can choose to use MSE or CCE losses for values and rewards
-(setting `scalar_support_size` in the game configuration transforms scalars to categorical
-representations in a manner similar to that described in [[1]](https://arxiv.org/abs/1911.08265)).
+You can define a custom training loop e.g. for synchroneous training, 
+whereby the same process alternates between self-playing games and training 
+the neural networks. To do this, you may simply use the `Environment`,
+`ReplayBuffer` and `Network` classes directly, instead of through their
+`RemoteEnvironment`, `RemoteReplayBuffer` and `RemoteNetwork` counterparts.   
 
-- **Weight and game buffer loading in asynchronous mode:** you can upload network weights
-and self-played games directly to the server in asynchronous mode in order to resume 
-training from a checkpoint of your choice.
-
-- **Playing against the latest network:** a basic interface is setup through the 
-server to play against the latest network directly on the browser in 
-asynchronous mode.
-
-- **Pre-built networks:** basic residual and fully connected architectures are defined
-in `network.py`, and can be reused simply defining the network parameters 
-(see examples in `games` directory).
-
-## To-do list
-
-- **Prioritized replay**
-- **Optimize hyperparameters for some of the included weights**
-- **Pre-trained networks**
+However, you should be aware that this is certainly going to be much slower
+than using the distributed, asynchroneous training.

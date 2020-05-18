@@ -1,7 +1,11 @@
-from storage_replay import *
-from evaluation import *
 import tensorflow as tf
+import numpy as np
 import os
+import argparse
+import time
+
+from utils import timestamp, load_game
+from replay_buffer import RemoteReplayBuffer
 
 
 def tensorboard_model_summary(model, line_length=100):
@@ -24,41 +28,37 @@ def loss_logger(summary_writer, step, metrics):
                 tf.summary.scalar(name=metric.name, data=metric.result(), step=step)
 
 
-def evaluation_logger(summary_writer, step, evaluation_stats):
-    if summary_writer:
-        with summary_writer.as_default():
-            for player, result in evaluation_stats.items():
-                tf.summary.scalar(name='Evaluation/{}'.format(player), data=result, step=step)
+# def evaluation_logger(summary_writer, step, evaluation_stats):
+#     if summary_writer:
+#         with summary_writer.as_default():
+#             for player, result in evaluation_stats.items():
+#                 tf.summary.scalar(name='Evaluation/{}'.format(player), data=result, step=step)
 
 
-def self_play_logger(summary_writer, step, num_games, num_positions, num_unique):
-    if summary_writer:
-        with summary_writer.as_default():
-            tf.summary.scalar(name='Self-play/Number of games', data=num_games, step=step)
-            tf.summary.scalar(name='Self-play/Number of positions', data=num_positions, step=step)
-            tf.summary.scalar(name='Self-play/Number of unique games', data=num_unique, step=step)
+# def self_play_logger(summary_writer, step, num_games, num_positions, num_unique):
+#     if summary_writer:
+#         with summary_writer.as_default():
+#             tf.summary.scalar(name='Self-play/Number of games', data=num_games, step=step)
+#             tf.summary.scalar(name='Self-play/Number of positions', data=num_positions, step=step)
+#             tf.summary.scalar(name='Self-play/Number of unique games', data=num_unique, step=step)
 
 
-def tensorboard_logger(config, checkpoint_path, network):
+def tensorboard_logger(training_config, checkpoint_path, network):
     if checkpoint_path:
-        checkpoint_dir = os.path.join(checkpoint_path, config.name, timestamp())
-        checkpoint_prefix = os.path.join(checkpoint_dir, '{}_ckpt'.format(config.name))
+        checkpoint_dir = os.path.join(checkpoint_path, training_config.game_config.name, timestamp())
+        checkpoint_prefix = os.path.join(checkpoint_dir, '{}_ckpt'.format(training_config.game_config.name))
         log_dir = os.path.join(checkpoint_dir, 'logs')
 
-    #     # Graphs for all networks
-    #     network = storage.latest_network()
-    #     # tensorboard_graph(network.representation, log_dir)
-    #     # tensorboard_graph(network.dynamics, log_dir)
-    #     # tensorboard_graph(network.prediction, log_dir)
-    #
         # Network and game information
         summary_writer = tf.summary.create_file_writer(log_dir)
         with summary_writer.as_default():
-            tf.summary.text(name='Configuration', data='| Key | Value |\n|-----|-------|\n' + '\n'.join(
-                '| {} | {} |'.format(key, value) for key, value in config.__dict__.items() if
-                key not in ['value_loss', 'reward_loss', 'optimizer', 'action_space', 'game_class', 'network_class', 'game_params']), step=0)
-            tf.summary.text(name='Game parameters', data='| Key | Value |\n|-----|-------|\n' + '\n'.join(
-                '| {} | {} |'.format(key, value) for key, value in config.game_params.items()), step=0)
+            tf.summary.text(name='Training configuration',
+                            data='| Key | Value |\n|-----|-------|\n' + '\n'.join(
+                '| {} | {} |'.format(key, value) for key, value in training_config.__dict__.items() if key not in
+                ['game_config', 'value_loss', 'reward_loss', 'optimizer']), step=0)
+            tf.summary.text(name='Game configuration',
+                            data='| Key | Value |\n|-----|-------|\n' + '\n'.join(
+                '| {} | {} |'.format(key, value) for key, value in training_config.game_config.__dict__.items()), step=0)
             tf.summary.text(name='Networks/Representation', data=tensorboard_model_summary(network.representation), step=0)
             tf.summary.text(name='Networks/Dynamics', data=tensorboard_model_summary(network.dynamics), step=0)
             tf.summary.text(name='Networks/Prediction', data=tensorboard_model_summary(network.prediction), step=0)
@@ -68,54 +68,8 @@ def tensorboard_logger(config, checkpoint_path, network):
     return checkpoint_prefix, summary_writer
 
 
-def synchronous_train_network(config, network, num_games, num_steps, num_eval_games, checkpoint_path=None):
-    replay_buffer = ReplayBuffer(config)
-    checkpoint = tf.train.Checkpoint(optimizer=config.optimizer,
-                                     representation=network.representation,
-                                     dynamics=network.dynamics,
-                                     prediction=network.prediction)
-
-    # Tensorboard logging
-    checkpoint_prefix, summary_writer = tensorboard_logger(config, checkpoint_path, network)
-
-    # Actual training
-    for step in range(config.training_steps):
-        if step % num_steps == 0:
-            batch_selfplay(config, replay_buffer, network, num_games)
-            self_play_logger(summary_writer, step=step,
-                             num_games=len(replay_buffer.buffer),
-                             num_positions=replay_buffer.num_positions,
-                             num_unique=replay_buffer.num_unique())
-
-        if step % config.checkpoint_interval == 0:
-            if checkpoint_prefix:
-                checkpoint.save(checkpoint_prefix)
-
-            if num_eval_games:
-                evaluation_stats = evaluate_against_random_agent(config, network, num_eval_games)
-                evaluation_logger(summary_writer, step=step, evaluation_stats=evaluation_stats)
-
-            # learning_rate = config.lr_init*config.lr_decay_rate ** (network.training_steps() / config.lr_decay_steps)
-            #      optimizer = tf.keras.optimizers.SGD(lr=learning_rate, momentum=config.momentum)
-
-            # Learning-rate logging
-            # if summary_writer:
-            #     with summary_writer.as_default():
-            #         tf.summary.scalar(name='Learning rate', data=learning_rate, step=i)
-
-        batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps, config.discount)
-        metrics = batch_update_weights(config, network, config.optimizer, batch)
-        loss_logger(summary_writer, step=step, metrics=metrics)
-
-    if checkpoint_prefix:
-        checkpoint.save(checkpoint_prefix)
-
-
-def train_network(server_address, num_eval_games, tensorboard_logpath=None):
-    client = MuZeroClient(server_address)
-    config = client.config
-    network = client.latest_network()
-    optimizer = config.optimizer
+def train_network(training_config, network, replay_buffer, saved_models_path=None, logging_path=None):
+    optimizer = training_config.optimizer
 
     checkpoint = tf.train.Checkpoint(optimizer=optimizer,
                                      representation=network.representation,
@@ -123,28 +77,21 @@ def train_network(server_address, num_eval_games, tensorboard_logpath=None):
                                      prediction=network.prediction)
 
     # Tensorboard logging
-    checkpoint_prefix, summary_writer = tensorboard_logger(config, tensorboard_logpath, network)
+    checkpoint_prefix, summary_writer = tensorboard_logger(training_config, logging_path, network)
 
-    for step in range(config.training_steps):
-        if step % config.checkpoint_interval == 0:
-            client.save_network(network)
+    for step in range(training_config.training_steps):
+        batch = replay_buffer.sample_batch(batch_size=training_config.batch_size,
+                                           num_unroll_steps=training_config.num_unroll_steps,
+                                           td_steps=training_config.td_steps,
+                                           discount=training_config.game_config.discount)
+        metrics = batch_update_weights(training_config, network, optimizer, batch)
+        loss_logger(summary_writer, step=step, metrics=metrics)
+
+        if network.training_steps() % training_config.checkpoint_interval == 0:
+            if saved_models_path:
+                network.save_model(saved_models_path)
             if checkpoint_prefix:
                 checkpoint.save(checkpoint_prefix)
-
-            if num_eval_games:
-                evaluation_stats = evaluate_against_random_agent(config, network, num_eval_games)
-                evaluation_logger(summary_writer, step=step, evaluation_stats=evaluation_stats)
-
-        server_information = client.stats()
-        self_play_logger(summary_writer, step=step,
-                         num_games=server_information['num_games'],
-                         num_positions=server_information['num_positions'],
-                         num_unique=server_information['num_unique'])
-
-        batch = client.sample_batch()
-        metrics = batch_update_weights(config, network, optimizer, batch)
-        loss_logger(summary_writer, step=step, metrics=metrics)
-    client.save_network(network)
 
 
 def scale_gradient(tensor, scale):
@@ -154,11 +101,10 @@ def scale_gradient(tensor, scale):
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
-def batch_update_weights(config, network, optimizer, batch):
+def batch_update_weights(training_config, network, optimizer, batch):
     value_loss_metric = tf.keras.metrics.Mean('Losses/Value', dtype=tf.float32)
     reward_loss_metric = tf.keras.metrics.Mean('Losses/Reward', dtype=tf.float32)
     policy_loss_metric = tf.keras.metrics.Mean('Losses/Policy', dtype=tf.float32)
-    toplay_loss_metric = tf.keras.metrics.Mean('Losses/ToPlay', dtype=tf.float32)
     regularization_metric = tf.keras.metrics.Sum('Losses/Regularization', dtype=tf.float32)
 
     with tf.GradientTape() as tape:
@@ -168,47 +114,43 @@ def batch_update_weights(config, network, optimizer, batch):
         batch_initial_inference = network.initial_inference(batch_images, training=True)
 
         batch_predictions = [(1.,
-                              batch_initial_inference.value,
+                              batch_initial_inference.batch_value,
                               None,
-                              batch_initial_inference.policy_logits,
-                              None,
+                              batch_initial_inference.batch_policy_logits,
                               False
                               )]
-        batch_hidden_state = batch_initial_inference.hidden_state
+        batch_hidden_state = batch_initial_inference.batch_hidden_state
 
         for batch_action in batch_actions.T:
             batch_recurrent_inference = network.recurrent_inference(batch_hidden_state, batch_action, training=True)
-            batch_predictions.append((1./config.num_unroll_steps,
-                                      batch_recurrent_inference.value,
-                                      batch_recurrent_inference.reward,
-                                      batch_recurrent_inference.policy_logits,
-                                      batch_recurrent_inference.to_play,
+            batch_predictions.append((1./training_config.num_unroll_steps,
+                                      batch_recurrent_inference.batch_value,
+                                      batch_recurrent_inference.batch_reward,
+                                      batch_recurrent_inference.batch_policy_logits,
                                       True
                                       ))
-            batch_hidden_state = scale_gradient(batch_recurrent_inference.hidden_state, 0.5)
+            batch_hidden_state = scale_gradient(batch_recurrent_inference.batch_hidden_state, 0.5)
 
-        loss = tf.constant(0, dtype=np.float32)
+        loss = tf.constant(0, dtype=tf.float32)
         for predictions, targets in zip(batch_predictions, batch_targets):
-            gradient_scale, batch_value, batch_reward, batch_policy_logits, batch_toplay, predict_reward = predictions
-            batch_target_value, batch_target_reward, batch_target_policy_logits, batch_target_toplay = zip(*targets)
+            gradient_scale, batch_value, batch_reward, batch_policy_logits, predict_reward = predictions
+            batch_target_value, batch_target_reward, batch_target_policy_logits = zip(*targets)
 
-            value_loss = config.value_loss_decay * config.value_loss(batch_target_value, batch_value)
+            value_loss = training_config.value_loss_decay * training_config.value_loss(batch_target_value, batch_value)
             value_loss_metric(value_loss)
 
             policy_loss = tf.keras.losses.categorical_crossentropy(batch_target_policy_logits, batch_policy_logits, from_logits=True)
             policy_loss_metric(policy_loss)
 
-            loss += tf.math.reduce_mean(scale_gradient(value_loss + policy_loss, gradient_scale))/(config.num_unroll_steps+1)
+            loss += tf.math.reduce_mean(scale_gradient(value_loss + policy_loss, gradient_scale))/(training_config.num_unroll_steps+1)
 
             if predict_reward:
-                reward_loss = config.reward_loss_decay * config.reward_loss(batch_target_reward, batch_reward)
+                reward_loss = training_config.reward_loss_decay * training_config.reward_loss(batch_target_reward, batch_reward)
                 reward_loss_metric(reward_loss)
 
-                toplay_loss = tf.keras.losses.sparse_categorical_crossentropy(batch_target_toplay, batch_toplay, from_logits=True)
-                toplay_loss_metric(toplay_loss)
-                loss += tf.math.reduce_mean(scale_gradient(reward_loss + toplay_loss, gradient_scale))/config.num_unroll_steps
+                loss += tf.math.reduce_mean(scale_gradient(reward_loss, gradient_scale))/training_config.num_unroll_steps
 
-        l2_regularization = config.regularization_decay * sum(tf.nn.l2_loss(weights) for weights in network.get_weights())
+        l2_regularization = training_config.regularization_decay * sum(tf.nn.l2_loss(weights) for weights in network.get_weights())
         regularization_metric(l2_regularization)
         loss += l2_regularization
 
@@ -216,4 +158,41 @@ def batch_update_weights(config, network, optimizer, batch):
     optimizer.apply_gradients(zip(grads, network.trainable_variables))
     network.steps += 1
 
-    return value_loss_metric, reward_loss_metric, policy_loss_metric, toplay_loss_metric, regularization_metric
+    return value_loss_metric, reward_loss_metric, policy_loss_metric, regularization_metric
+
+
+if __name__ == '__main__':
+    from importlib import import_module
+    game_module = import_module('games.cartpole')
+
+    parser = argparse.ArgumentParser(description='MuZero Training Client')
+    parser.add_argument('--game', type=str, required=True,
+                        help='One of the games implemented in the games/ directory')
+    parser.add_argument('--replay_buffer', type=str, required=True,
+                        help='IP:Port for gRPC communication with a replay buffer server')
+    parser.add_argument('--min_games', type=int, default=1,
+                        help='Minimum number of games required to start training')
+    parser.add_argument('--saved_models_path', type=str, required=True,
+                        help='Path to the models/ directory served by tensorflow serving.')
+    parser.add_argument('--logging_path', type=str, default=None,
+                        help='Path to the directory where checkpoints and logs shall be stored.')
+    args = parser.parse_args()
+
+    if not os.path.isdir(args.logging_path):
+        parser.error('{} is not a valid directory!'.format(args.logging_path))
+    else:
+        config = load_game(args.game, parser)
+        local_network = config.network_config.make_uniform_network()
+        remote_replay_buffer = RemoteReplayBuffer(ip_port=args.replay_buffer)
+
+        local_network.save_model(args.saved_models_path)
+
+        while remote_replay_buffer.stats()['num_games'] < args.min_games:
+            print('Waiting for {} games to be available on the replay buffer...'.format(args.min_games))
+            time.sleep(60)
+
+        train_network(training_config=config.training_config,
+                      network=local_network,
+                      replay_buffer=remote_replay_buffer,
+                      saved_models_path=args.saved_models_path,
+                      logging_path=args.logging_path)

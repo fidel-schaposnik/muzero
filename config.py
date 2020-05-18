@@ -1,83 +1,96 @@
-from environment import *
-import tensorflow as tf
-import numpy as np
-from math import sqrt, log
+from math import log, sqrt
+from environment import Action
+
+class ReplayBufferConfig:
+    def __init__(self,
+                 window_size
+                 ):
+        self.window_size = window_size
 
 
-class MuZeroConfig:
+class GameConfig:
     def __init__(self,
                  name,
-                 value_loss_decay,
-                 reward_loss_decay,
-                 regularization_decay,
-                 window_size,
+                 environment_class,
+                 environment_parameters,
+                 num_players,
+                 action_space_size,
+                 discount):
+        self.name = name
+        self.environment_class = environment_class
+        self.environment_parameters = environment_parameters
+        self.num_players = num_players
+        self.action_space_size = action_space_size
+        self.discount = discount
+
+        self.action_space = [Action(index) for index in range(action_space_size)]
+
+
+class TrainingConfig:
+    def __init__(self,
+                 game_config,
                  batch_size,
                  num_unroll_steps,
                  td_steps,
+                 optimizer,
                  training_steps,
                  checkpoint_interval,
-                 optimizer,
-                 num_simulations,
-                 known_bounds,
-                 discount,
-                 freezing_moves,
-                 root_dirichlet_alpha,
-                 root_exploration_fraction,
-                 max_moves,
-                 game_class,
-                 network_class,
-                 state_action_encoder,
-                 action_space_size,
-                 **game_params):
-
-        # Game parameters
-        self.name = name
-        self.game_class = game_class
-        self.network_class = network_class
-        self.state_action_encoder = state_action_encoder
-        self.action_space_size = action_space_size
-        self.action_space = [Action(i) for i in range(action_space_size)]
-        self.game_params = game_params
-
-        # MCTS parameters
-        self.num_simulations = num_simulations
-        self.known_bounds = known_bounds
-        self.discount = discount
-        self.freezing_moves = freezing_moves
-        self.root_dirichlet_alpha = root_dirichlet_alpha
-        self.root_exploration_fraction = root_exploration_fraction
-        self.max_moves = max_moves
-
-        # Training parameters
-        if 'scalar_support_size' in game_params.keys():
-            self.value_loss = tf.keras.losses.categorical_crossentropy
-            self.reward_loss = tf.keras.losses.categorical_crossentropy
-        else:
-            self.value_loss = tf.keras.losses.mean_squared_error
-            self.reward_loss = tf.keras.losses.mean_squared_error
-
-        self.value_loss_decay = value_loss_decay
-        self.reward_loss_decay = reward_loss_decay
-        self.regularization_decay = regularization_decay
-        self.window_size = window_size
+                 value_loss_decay,
+                 value_loss,
+                 reward_loss_decay,
+                 reward_loss,
+                 regularization_decay
+                 ):
+        self.game_config = game_config
         self.batch_size = batch_size
         self.num_unroll_steps = num_unroll_steps
         self.td_steps = td_steps
+        self.optimizer = optimizer
         self.training_steps = training_steps
         self.checkpoint_interval = checkpoint_interval
-        self.optimizer = optimizer
+        self.value_loss_decay = value_loss_decay
+        self.value_loss = value_loss
+        self.reward_loss_decay = reward_loss_decay
+        self.reward_loss = reward_loss
+        self.regularization_decay = regularization_decay
 
-    def visit_softmax_temperature_fn(self, num_moves, num_steps):
-        if num_moves < self.freezing_moves:
-            return 1.0
-        else:
-            return 0.0  # Play according to the max.
 
-    def new_game(self):
-        return self.game_class(**self.game_params)
+class MCTSConfig:
+    def __init__(self,
+                 max_moves,
+                 root_dirichlet_alpha,
+                 root_exploration_fraction,
+                 known_bounds,
+                 num_simulations,
+                 game_config):
+        self.max_moves = max_moves
+        self.root_dirichlet_alpha = root_dirichlet_alpha
+        self.root_exploration_fraction = root_exploration_fraction
+        self.known_bounds = known_bounds
+        self.num_simulations = num_simulations
+        self.game_config = game_config
+
+    def visit_softmax_temperature_fn(self, num_moves, training_steps):
+        return 1.0
+
+    def exploration_function(self, parent_visit_count, child_visit_count):
+        return sqrt(2 * parent_visit_count) / (child_visit_count + 1)
+
+
+class NetworkConfig:
+    def __init__(self, network_class, state_action_encoder, network_parameters):
+        self.network_class = network_class
+        self.state_action_encoder = state_action_encoder
+        self.network_parameters = network_parameters
 
     def make_uniform_network(self):
-        return self.network_class(state_action_encoder=self.state_action_encoder, **self.game_params)
+        return self.network_class(state_action_encoder=self.state_action_encoder, **self.network_parameters)
 
-    def exploration_function(self, parent_simulations, child_simulations):
-        return sqrt(parent_simulations)/(child_simulations + 1)
+
+class MuZeroConfig:
+    def __init__(self, game_config, replay_buffer_config, training_config, mcts_config, network_config):
+        self.game_config = game_config
+        self.replay_buffer_config = replay_buffer_config
+        self.training_config = training_config
+        self.mcts_config = mcts_config
+        self.network_config = network_config
