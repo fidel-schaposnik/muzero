@@ -21,15 +21,15 @@ The main components are:
 
 - An environment server.
 
-- A replay buffer, storing the self-played games and producing from them
+- A replay buffer server, storing the self-played games and producing from them
 the training batches.
 
 - A network server, performing the neural network evaluations required during
 self-play (provided by `tensorflow-serving`).
 
-- A Monte-Carlo Tree-Search agent, playing games using the latest networks available.
+- A Monte-Carlo Tree-Search agent, playing games using the latest networks available from a network server.
 
-- A training agent, using the self-played games to train the networks and improve
+- A training agent, using the self-played games to train the neural networks and improve
 gameplay.
 
 ## Usage
@@ -61,6 +61,16 @@ is the minimum number of games in the replay buffer before training starts.
 1. Start one or more self-playing agents using
 `python agent.py --game GAME --environment ENVIRONMENT_IP:PORT --replay_buffer REPLAY_IP:PORT --network NETWORK_IP:PORT --num_games NUM_GAMES`,
 where the `IP:PORT` pairs point to the servers of steps 1-3.
+
+#### Monitoring
+
+- You con monitor the training progress using tensorboard by running `tensorboard --logdir $PWD\logs`.
+
+- The tensorflow-serving server exposes [Prometheus](http://prometheus.io/) metrics through HTTP at port `HTTP_PORT`
+defined in step 3 (e.g. http://localhost:50003/metrics).
+
+- You may monitor the replay buffer and networks using `python monitor.py --replay_buffer REPLAY_IP:PORT`,
+which starts a Flask server on port 5000 showing various statistics.
 
 ## Currently implemented games:
 
