@@ -3,51 +3,39 @@
 <html>
 
 <head>
-    <title>MuZero server - Summary</title>
+    <title>MuZero Monitoring - Summary</title>
     <link rel="stylesheet" type="text/css" href="css/style.css">
 </head>
 
 <body>
 
 <center>
-<h1>MuZero server summary</h1>
+<h1>Replay Buffer</h1>
 
     <table>
         <tr>
-            <th align="right"><b>Number of registered clients:</b></th>
-            <td>num_clients</td>
-        </tr>
-        <tr>
-            <th align="right"><b>Latest network at step:</b></th>
-            <td>latest_step</td>
-        </tr>
-        <tr>
             <th align="right"><b>Number of games:</b></th>
             <td>num_games</td>
+        </tr>
+        <tr>
+            <th align="right"><b>Number of unique games:</b></th>
+            <td>num_unique_games</td>
         </tr>
         <tr>
             <th align="right"><b>Number of positions:</b></th>
             <td>num_positions</td>
         </tr>
         <tr>
-            <th align="right"><b>Number of unique games:</b></th>
-            <td>num_unique</td>
+            <th align="right"><b>Number of unique positions:</b></th>
+            <td>num_unique_positions</td>
+        </tr>
+        <tr>
+            <th align="right"><b>Average game length:</b></th>
+            <td>avg_game_length</td>
         </tr>
         <tr>
             <th align="right"><b>Total number of games so far:</b></th>
             <td>total_games</td>
-        </tr>
-        <tr>
-            <th align="right"><b>Number of game backup files:</b></th>
-            <td>num_backups</td>
-        </tr>
-        <tr>
-            <th align="right"><b>Number of training batches:</b></th>
-            <td>num_batches</td>
-        </tr>
-        <tr>
-            <th align="right"><b>Server uptime:</b></th>
-            <td>total_runtime</td>
         </tr>
     </table>
 

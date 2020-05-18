@@ -57,21 +57,27 @@ class TrainingConfig:
 
 class MCTSConfig:
     def __init__(self,
+                 game_config,
                  max_moves,
                  root_dirichlet_alpha,
                  root_exploration_fraction,
                  known_bounds,
                  num_simulations,
-                 game_config):
+                 freezing_moves
+                 ):
+        self.game_config = game_config
         self.max_moves = max_moves
         self.root_dirichlet_alpha = root_dirichlet_alpha
         self.root_exploration_fraction = root_exploration_fraction
         self.known_bounds = known_bounds
         self.num_simulations = num_simulations
-        self.game_config = game_config
+        self.freezing_moves = freezing_moves
 
     def visit_softmax_temperature_fn(self, num_moves, training_steps):
-        return 1.0
+        if num_moves < self.freezing_moves:
+            return 1.0
+        else:
+            return 0.0
 
     def exploration_function(self, parent_visit_count, child_visit_count):
         return sqrt(2 * parent_visit_count) / (child_visit_count + 1)

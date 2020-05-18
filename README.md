@@ -93,3 +93,8 @@ the neural networks. To do this, you may simply use the `Environment`,
 
 However, you should be aware that this is certainly going to be much slower
 than using the distributed, asynchroneous training.
+
+## Notes
+
+- You may want to tinker with `models/batching.config` and/or use a different
+tensorflow-serving Docker image to optimize network throughput in your system.

@@ -14,9 +14,6 @@ from utils import MinMaxStats, load_game
 
 
 class Agent:
-    def __init__(self):
-        pass
-
     def play_game(self, environment):
         """
         Plays a game in the Environment.
@@ -39,6 +36,9 @@ class Agent:
 
 
 class RandomAgent(Agent):
+    """
+    Completely random agent, for testing purposes.
+    """
     def make_move(self, game):
         return random.choice(game.legal_actions())
 
@@ -62,10 +62,35 @@ class Node:
             return 0
         return self.value_sum / self.visit_count
 
+    def print(self, _prefix='', name='Root', _last=True):
+        print(_prefix, '`- ' if _last else '|- ', '{}: value={}; reward={}'.format(name, float(self.value()), float(self.reward)), sep="")
+        _prefix += '   ' if _last else '|  '
+        child_count = len(self.children)
+        for i, (action, child) in enumerate(self.children.items()):
+            _last = i == (child_count - 1)
+            child.print(_prefix, action, _last)
+
+
+class NetworkAgent(Agent):
+    """
+    Agent greedily choosing the best action according to a network's policy outputs.
+    This is essentially like MCTSAgent with num_simulations = 0.
+    """
+    def __init__(self, network):
+        self.network = network
+
+    def make_move(self, game):
+        observation = np.array([game.make_image()], dtype=np.float32)
+        policy_logits = self.network.initial_inference(observation).split_batch()[0].policy_logits
+        # print(policy_logits)
+        _, action = max([(policy_logits[action], action) for action in game.legal_actions()])
+        return action
 
 class MCTSAgent(Agent):
+    """
+    Use Monte-Carlo Tree-Search to select moves.
+    """
     def __init__(self, mcts_config, network):
-        super().__init__()
         self.config = mcts_config
         self.network = network
 
@@ -103,11 +128,14 @@ class MCTSAgent(Agent):
         return action, node, num_moves
 
     def select_child(self, node, min_max_stats):
+        # print({action: float(self.ucb_score(child, min_max_stats)) for action, child in node.children.items()})
         _, action, child = max(
             (self.ucb_score(child, min_max_stats), action, child) for action, child in node.children.items())
+        # print('Going down {}'.format(action))
+        # input('Press any key to continue...')
         return action, child
 
-    def ucb_score(self, node, min_max_stats: MinMaxStats):
+    def ucb_score(self, node, min_max_stats):
         exploration_score = node.prior * self.config.exploration_function(node.parent.visit_count, node.visit_count)
         if node.visit_count > 0:
             exploitation_score = node.reward + self.config.game_config.discount * min_max_stats.normalize(node.value())
@@ -120,13 +148,14 @@ class MCTSAgent(Agent):
             node.value_sum += value if node.to_play == to_play else -value
             node.visit_count += 1
             min_max_stats.update(node.value())
-            value = node.reward + self.config.game_config.discount * value
+            value = node.reward + self.config.game_config.discount * value  # This probably needs to take into account to_play!
             node = node.parent
 
     def run_mcts(self, root, num_moves):
         min_max_stats = MinMaxStats(self.config.known_bounds)
 
         for _ in range(self.config.num_simulations):
+            # root.print()
             action, leaf, cur_moves = self.select_leaf(root, num_moves, min_max_stats)
             to_play = Player(cur_moves % self.config.game_config.num_players)
 

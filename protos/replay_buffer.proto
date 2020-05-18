@@ -13,7 +13,7 @@ service ReplayBuffer {
 message Empty {}
 
 message StatsResponse {
-  map<string, int32> metrics = 1;
+  map<string, float> metrics = 1;
 }
 
 message Policy {

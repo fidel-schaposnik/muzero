@@ -15,12 +15,13 @@ def make_config():
 
     replay_buffer_config = ReplayBufferConfig(window_size=int(1e5))
 
-    mcts_config = MCTSConfig(max_moves=500,
+    mcts_config = MCTSConfig(game_config=game_config,
+                             max_moves=500,
                              root_dirichlet_alpha=1.0,
                              root_exploration_fraction=0.25,
                              known_bounds=None,
                              num_simulations=16,
-                             game_config=game_config
+                             freezing_moves=20
                              )
 
     network_config = NetworkConfig(network_class=CartPoleNetwork,
