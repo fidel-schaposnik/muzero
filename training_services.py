@@ -4,9 +4,9 @@ import tensorflow as tf
 from tensorboard.plugins.hparams import api as hp
 from grpc import RpcError
 
-from muzero.utils import CommandLineParser
-from muzero.replay_buffer_services import RemoteReplayBuffer
-from muzero.training import train_network
+from utils import CommandLineParser
+from replay_buffer_services import RemoteReplayBuffer
+from training import train_network
 
 
 def tensorboard_model_summary(model: tf.keras.Model, line_length: int = 100) -> str:

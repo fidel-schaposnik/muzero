@@ -28,12 +28,13 @@ message StatsResponse {
 }
 
 message GameHistory {
-  repeated TensorProto states = 1;
-  repeated int32 actions = 2;
-  repeated float rewards = 3;
-  repeated float root_values = 4;
-  repeated TensorProto policies = 5;
-  map<string, bytes> metadata = 6;
+  repeated TensorProto observations = 1;
+  repeated int32 to_plays = 2;
+  repeated int32 actions = 3;
+  repeated float rewards = 4;
+  repeated float root_values = 5;
+  repeated TensorProto policies = 6;
+  map<string, bytes> metadata = 7;
 }
 
 message GameHistoryList {

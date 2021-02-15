@@ -4,10 +4,10 @@ import tensorflow as tf
 # For type annotations
 from typing import List, Dict, Optional, Union
 
-from muzero.config import MuZeroConfig
-from muzero.network import Network
-from muzero.replay_buffer import ReplayBuffer
-from muzero.replay_buffer_services import RemoteReplayBuffer
+from config import MuZeroConfig
+from network import Network
+from replay_buffer import ReplayBuffer
+from replay_buffer_services import RemoteReplayBuffer
 
 
 def scale_gradient(tensor: tf.Tensor, scale: tf.Tensor) -> tf.Tensor:

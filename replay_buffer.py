@@ -2,15 +2,15 @@ import random
 import tensorflow as tf
 from threading import RLock
 
-from muzero.game_services import save_games, load_games
-from muzero.utils import RollingMean
+from game_services import save_games, load_games
+from utils import RollingMean
 
 # For type annotations
 from typing import Callable, List, Dict, Tuple, Optional, Any
 
-from muzero.muprover_types import Observation, ActionBatch, ValueBatch, PolicyBatch, Value, Action
-from muzero.config import MuZeroConfig
-from muzero.game import GameHistory
+from muzero_types import Observation, ActionBatch, ValueBatch, PolicyBatch, Value, Action
+from config import MuZeroConfig
+from game import GameHistory
 
 
 class ReplayBuffer:
@@ -23,7 +23,9 @@ class ReplayBuffer:
         self.config: MuZeroConfig = config
         self.window_size: int = config.replay_buffer_config.window_size
         self.action_space_size: int = config.game_config.action_space_size
-        self.discount: float = config.game_config.discount
+        self.effective_discount: float = config.game_config.discount
+        if config.game_config.num_players == 2:
+            self.effective_discount *= -1
         self.num_unroll_steps: int = config.training_config.num_unroll_steps
         self.td_steps: int = config.training_config.td_steps
 
@@ -64,10 +66,10 @@ class ReplayBuffer:
     def compute_target_value(self, history: GameHistory, index: int) -> Value:
         bootstrap_index = index + self.td_steps
         if bootstrap_index < len(history):
-            value = history.root_values[bootstrap_index] * self.discount ** self.td_steps
+            value = history.root_values[bootstrap_index] * self.effective_discount ** self.td_steps
         else:
             value = 0
-        value += sum(reward * self.discount ** i for i, reward in enumerate(history.rewards[index:bootstrap_index]))
+        value += sum(reward * self.effective_discount ** i for i, reward in enumerate(history.rewards[index:bootstrap_index]))
         return Value(value)
 
     def preprocess_history(self, history: GameHistory) -> None:
@@ -83,7 +85,7 @@ class ReplayBuffer:
 
         # Extend target values past the terminal state using the last value
         target_values = [self.compute_target_value(history, index) for index in range(len(history))]
-        target_values.extend([target_values[-1] for _ in range(self.num_unroll_steps+1)])
+        target_values.extend([0 for _ in range(self.num_unroll_steps+1)])
         history.target_values = self.config.value_config.inv_to_scalar(tf.constant(target_values, dtype=tf.float32))
 
         # Extend target policies past the terminal state using uniform policies
@@ -93,7 +95,7 @@ class ReplayBuffer:
                 tf.ones(shape=(self.num_unroll_steps+1, self.action_space_size)) / self.action_space_size
             ], axis=0)
 
-        history.total_value = sum(reward * self.discount**i for i, reward in enumerate(history.rewards))
+        history.total_value = sum(reward * self.effective_discount**i for i, reward in enumerate(history.rewards))
         history.metadata['num_batches'] = 0
 
     def save_history(self, game_history: GameHistory) -> None:
@@ -134,7 +136,6 @@ class ReplayBuffer:
         target_values = history.target_values[game_pos:game_pos + self.num_unroll_steps + 1]
         target_policies = history.target_policies[game_pos:game_pos + self.num_unroll_steps + 1]
 
-        # observation.shape = (n1, n2, n3)
         # actions.shape = (num_unroll_steps, )
         # target_rewards.shape = (num_unroll_steps+1, 1) or (num_unroll_steps+1, reward_support_size+1)
         # target_values.shape = (num_unroll_steps+1, 1) or (num_unroll_steps+1, value_support_size+1)

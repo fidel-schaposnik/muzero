@@ -2,7 +2,7 @@
 """Client and server classes corresponding to protobuf-defined services."""
 import grpc
 
-from muzero.protos import environment_pb2 as muzero_dot_protos_dot_environment__pb2
+from protos import environment_pb2 as protos_dot_environment__pb2
 
 
 class RemoteEnvironmentStub(object):
@@ -16,23 +16,23 @@ class RemoteEnvironmentStub(object):
         """
         self.Initialization = channel.unary_unary(
                 '/tensorflow.muprover.RemoteEnvironment/Initialization',
-                request_serializer=muzero_dot_protos_dot_environment__pb2.InitializationRequest.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_environment__pb2.InitializationResponse.FromString,
+                request_serializer=protos_dot_environment__pb2.InitializationRequest.SerializeToString,
+                response_deserializer=protos_dot_environment__pb2.InitializationResponse.FromString,
                 )
         self.Finalization = channel.unary_unary(
                 '/tensorflow.muprover.RemoteEnvironment/Finalization',
-                request_serializer=muzero_dot_protos_dot_environment__pb2.FinalizationRequest.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_environment__pb2.FinalizationResponse.FromString,
+                request_serializer=protos_dot_environment__pb2.FinalizationRequest.SerializeToString,
+                response_deserializer=protos_dot_environment__pb2.FinalizationResponse.FromString,
                 )
         self.Step = channel.unary_unary(
                 '/tensorflow.muprover.RemoteEnvironment/Step',
-                request_serializer=muzero_dot_protos_dot_environment__pb2.StepRequest.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_environment__pb2.StepResponse.FromString,
+                request_serializer=protos_dot_environment__pb2.StepRequest.SerializeToString,
+                response_deserializer=protos_dot_environment__pb2.StepResponse.FromString,
                 )
         self.Reset = channel.unary_unary(
                 '/tensorflow.muprover.RemoteEnvironment/Reset',
-                request_serializer=muzero_dot_protos_dot_environment__pb2.ResetRequest.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_environment__pb2.ResetResponse.FromString,
+                request_serializer=protos_dot_environment__pb2.ResetRequest.SerializeToString,
+                response_deserializer=protos_dot_environment__pb2.ResetResponse.FromString,
                 )
 
 
@@ -68,23 +68,23 @@ def add_RemoteEnvironmentServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Initialization': grpc.unary_unary_rpc_method_handler(
                     servicer.Initialization,
-                    request_deserializer=muzero_dot_protos_dot_environment__pb2.InitializationRequest.FromString,
-                    response_serializer=muzero_dot_protos_dot_environment__pb2.InitializationResponse.SerializeToString,
+                    request_deserializer=protos_dot_environment__pb2.InitializationRequest.FromString,
+                    response_serializer=protos_dot_environment__pb2.InitializationResponse.SerializeToString,
             ),
             'Finalization': grpc.unary_unary_rpc_method_handler(
                     servicer.Finalization,
-                    request_deserializer=muzero_dot_protos_dot_environment__pb2.FinalizationRequest.FromString,
-                    response_serializer=muzero_dot_protos_dot_environment__pb2.FinalizationResponse.SerializeToString,
+                    request_deserializer=protos_dot_environment__pb2.FinalizationRequest.FromString,
+                    response_serializer=protos_dot_environment__pb2.FinalizationResponse.SerializeToString,
             ),
             'Step': grpc.unary_unary_rpc_method_handler(
                     servicer.Step,
-                    request_deserializer=muzero_dot_protos_dot_environment__pb2.StepRequest.FromString,
-                    response_serializer=muzero_dot_protos_dot_environment__pb2.StepResponse.SerializeToString,
+                    request_deserializer=protos_dot_environment__pb2.StepRequest.FromString,
+                    response_serializer=protos_dot_environment__pb2.StepResponse.SerializeToString,
             ),
             'Reset': grpc.unary_unary_rpc_method_handler(
                     servicer.Reset,
-                    request_deserializer=muzero_dot_protos_dot_environment__pb2.ResetRequest.FromString,
-                    response_serializer=muzero_dot_protos_dot_environment__pb2.ResetResponse.SerializeToString,
+                    request_deserializer=protos_dot_environment__pb2.ResetRequest.FromString,
+                    response_serializer=protos_dot_environment__pb2.ResetResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -108,8 +108,8 @@ class RemoteEnvironment(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/tensorflow.muprover.RemoteEnvironment/Initialization',
-            muzero_dot_protos_dot_environment__pb2.InitializationRequest.SerializeToString,
-            muzero_dot_protos_dot_environment__pb2.InitializationResponse.FromString,
+            protos_dot_environment__pb2.InitializationRequest.SerializeToString,
+            protos_dot_environment__pb2.InitializationResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -125,8 +125,8 @@ class RemoteEnvironment(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/tensorflow.muprover.RemoteEnvironment/Finalization',
-            muzero_dot_protos_dot_environment__pb2.FinalizationRequest.SerializeToString,
-            muzero_dot_protos_dot_environment__pb2.FinalizationResponse.FromString,
+            protos_dot_environment__pb2.FinalizationRequest.SerializeToString,
+            protos_dot_environment__pb2.FinalizationResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -142,8 +142,8 @@ class RemoteEnvironment(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/tensorflow.muprover.RemoteEnvironment/Step',
-            muzero_dot_protos_dot_environment__pb2.StepRequest.SerializeToString,
-            muzero_dot_protos_dot_environment__pb2.StepResponse.FromString,
+            protos_dot_environment__pb2.StepRequest.SerializeToString,
+            protos_dot_environment__pb2.StepResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -159,7 +159,7 @@ class RemoteEnvironment(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/tensorflow.muprover.RemoteEnvironment/Reset',
-            muzero_dot_protos_dot_environment__pb2.ResetRequest.SerializeToString,
-            muzero_dot_protos_dot_environment__pb2.ResetResponse.FromString,
+            protos_dot_environment__pb2.ResetRequest.SerializeToString,
+            protos_dot_environment__pb2.ResetResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

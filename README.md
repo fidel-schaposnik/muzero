@@ -7,8 +7,6 @@ in the original paper:
 E Lockhart, D. Hassabis, T. Graepel, T. Lillicrap, D. Silver,
 ["Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model"](https://arxiv.org/abs/1911.08265)
 
-This code has been adapted for 1-player games.
-
 ## Design
 
 This implementation isolates the various components of MuZero, and uses
@@ -18,78 +16,65 @@ required for solving complex problems.
 
 The main components are:
 
-- An environment server `environment`.
+- An environment server (`environment`).
 
-- A replay buffer server `replay`, storing the self-played games and producing training 
+- A replay buffer server (`replay`), storing the self-played games and producing training 
 batches from these.
 
-- A network server `network`, performing the neural network evaluations required during
+- A network server (`network`), performing the neural network evaluations required during
 self-play (provided by TensorFlow Serving).
 
-- A training agent `training`, using the self-played games from `replay` to train the neural networks 
-provided by `network`.
+- A training agent (`training`), using the self-played games from `replay` to train the 
+  neural networks in `network`.
 
-- A Monte-Carlo Tree-Search agent `agent`, playing games using the latest networks 
-available from a network server `network`.
+- A Monte-Carlo Tree-Search agent (`agent`), playing games using the latest networks 
+available in `network` to produce games for `replay`.
 
-## Install
+## Installation
 
 ### Requirements
 
+#### Install nvidia drivers for GPU support (optional)
+
 Notice that we assume that system-wide nvidia drivers are installed. Installation of nvidia drivers is beyond the scope of this note. However, for Ubuntu 20.04 LTS and recent nvidia GPU's you can try
  ```
-sudo add-apt-repository ppa:graphics-drivers
+ sudo add-apt-repository ppa:graphics-drivers
 sudo apt install ubuntu-drivers-common
 ubuntu-drivers devices
 sudo apt-get install nvidia-driver-450
 ```
-#### Installing TensorFlow Serving
+
+#### Install TensorFlow Serving
 
 Follow the instructions in https://www.tensorflow.org/tfx/serving/setup to install 
 TensorFlow Serving. In short, add the TensorFlow Serving distribution URI as a
-package source and then `sudo apt-get update && sudo apt-get install tensorflow-model-server`
+package source and then
+
+```sudo apt-get update && sudo apt-get install tensorflow-model-server```
 
 Alternatively, you can also run TensorFlow Serving in a Docker image (instructions 
 at https://www.tensorflow.org/tfx/serving/docker ).
 
 #### Install `conda`, `sshfs` and `screen`
 
-### Install muprover
-Clone git repository muprover, cd into muprover and run `./install.sh`
+### Installing muzero
 
-Follow instructions if errors in installation are detected. The script `./install.sh` 
- - checks necessary dependencies (tensorflow_model_server, conda, sshfs)
- - installs cudatoolkit and cudnn libraries in conda prefix conda/tf24 under `muprover` dir with versions suitable for tensorflow 2.4
- - installs tensorflow 2.4 and python (pip) dependencies in python virtual environment under `muprover`
- - installs pip package `muzero` in this virtual environment automatically generating executable scripts `muzero-environment`, `muzero-agent`, `muzero-replay` and `muzero-training` that are wrappers for python modules `muzero.environment_services`, `muzero.agent_services`, `muzero.replay_buffer_services` and `muzero.training_services`
- - when these scripts are executed by shell (for example with their full path), it is not necessary to activate any kind of conda or python virtual environments for correct track of dependencies 
- - therefore one can have multiple isolated versions of muzero installed in separate directories that do not require any special activations to run them in their own environment (with individual versions of cudatoolkit, cudnn and tensorflow libraries)
- - creates a sample config file `config.local` to run master script `./muprover.sh`
- - instructs on a sample run of `./muprover.sh` with `config.local`
- - Notice that `./muprover.sh` script needs to be supplied with the location of the muprover directory relative to $HOME that you want to use
- - Notice that installation is tested with specific compatible versions of cudatoolkit, cudnn and tensorflow 2.4. If you want to try other combinations of versions of these libraries, modify the version parameters at the header of `./install.sh` and in `requirements-dev.txt` and `requirements.txt`
-
+Clone this git repository and install required dependencies 
+(**TODO: streamline installation**).
  
- ### Compiling protocol buffer files (optional)
+#### Compiling protocol buffer files (optional)
 
 You can (re)compile the protocol buffer files in the `protos` folder to generate the required
-gRPC code: 
-
-- `python -m grpc_tools.protoc -I . -I PATH_TO_TENSORFLOW --python_out=. --grpc_python_out=. muzero/protos/environment.proto`
-
-- `python -m grpc_tools.protoc -I . -I PATH_TO_TENSORFLOW --python_out=. --grpc_python_out=. muzero/protos/replay_buffer.proto`
-
+gRPC code:
+```
+python -m grpc_tools.protoc -I . -I PATH_TO_TENSORFLOW --python_out=. --grpc_python_out=. muzero/protos/environment.proto
+python -m grpc_tools.protoc -I . -I PATH_TO_TENSORFLOW --python_out=. --grpc_python_out=. muzero/protos/replay_buffer.proto
+```
 Here `PATH_TO_TENSORFLOW` is the path to the tensorflow source code root folder,
 containing `tensorflow/core/framework/tensor.proto` (you may clone it from 
 https://github.com/tensorflow/tensorflow ).
 
-### Updating muzero package installation in editable mode (optional)
-
-Run 
- - `venv/bin/pip install -e .`
-in the `muprover` directory containing `setup.py` script.
-
-#### Configure the Tensorflow Serving `models.config` file
+#### Configuring the Tensorflow Serving `models.config` file
 
 The file `models/models.config` specifies which models the TensorFlow Serving server 
 will serve. In our case, this amounts to two separate models: `initial_inference` 
@@ -107,20 +92,12 @@ and `/models/recurrent_inference`, as shown in the file `models/docker_models.co
 
 ## Usage
 
-In shell activate venv environment with 
-
-```
-source venv/bin/activate
-```
-
-Alternatively, provide full path to the executable scripts like `venv/bin/muzero-environment` etc.
-
-Follow these steps to train MuProver to play a given game:
+Follow these steps to train MuZero to play a given game:
 
 1. Start an environment server `environment` using
 
    ```
-   muzero-environment --game GAME --port PORT
+   python environment_services.py --game GAME --port PORT
    ```
 
    where `GAME` is one of the games implemented in the `games` directory 
@@ -129,18 +106,16 @@ Follow these steps to train MuProver to play a given game:
 1. Start a replay buffer server `replay` using
 
    ```
-   muzero-replay --game GAME --port PORT --logdir LOG_DIR
+   python replay_buffer_services.py --game GAME --port PORT --logdir LOG_DIR
    ```
 
    where `GAME` is one of the games implemented in the `games` directory 
-   and `PORT` is the port for gRPC communication, _e.g._ 50001. The optional 
-   `--logdir` argument results in exporting replay buffer statistics in TensorBoard 
-   format to the `LOG_DIR` directory.
+   and `PORT` is the port for gRPC communication, _e.g._ 50001.
    
 1. Start the training agent `training` using
 
    ```
-   muzero-training --game GAME --replay_buffer REPLAY_IP:PORT --min_games MIN_GAMES --saved_models MODELS_DIR --logdir LOG_DIR
+   python training_services.py --game GAME --replay_buffer REPLAY_IP:PORT --min_games MIN_GAMES --saved_models MODELS_DIR --logdir LOG_DIR
    ```
 
    where `GAME` is one of the games implemented in the `games` directory,
@@ -150,7 +125,7 @@ Follow these steps to train MuProver to play a given game:
    `MODELS_DIR` where the TensorFlow Serving server in step 4 will find its models 
    (this should be specified in the `models/models.config` file). The optional 
    `--logdir` argument results in exporting training statistics in TensorBoard 
-   format to the `LOG_DIR` directory. You can find out about other optional arguments
+   format to the `LOG_DIR` directory (as well as training checkpoints). You can find out about other optional arguments
    using `python training_services.py --help`.
 
 1. Start the TensorFlow Serving neural network server `network` using
@@ -167,7 +142,7 @@ Follow these steps to train MuProver to play a given game:
    Alternatively, if using a Docker container the corresponding command is
 
    ```
-   docker run -t --rm -p PORT:8500 -p HTTP_PORT:8501 --mount type=bind,source=$PWD/models,target=/models --name muprover_tfserver tensorflow/serving --model_config_file=/models/docker_models.config --enable_batching --batching_parameters_file=/models/batching.config --monitoring_config_file=/models/monitoring.config --file_system_poll_wait_seconds=15
+   docker run -t --rm -p PORT:8500 -p HTTP_PORT:8501 --mount type=bind,source=$PWD/models,target=/models --name muzero_tfserver tensorflow/serving --model_config_file=/models/docker_models.config --enable_batching --batching_parameters_file=/models/batching.config --monitoring_config_file=/models/monitoring.config --file_system_poll_wait_seconds=15
    ```
 
    **NOTE:** If your system supports it, you can use the GPU-enabled docker container 
@@ -244,7 +219,7 @@ The following games have already been implemented (though only partial experimen
 have been carried out with them):
 
 - [CartPole](https://github.com/openai/gym/wiki/CartPole-v0) (`games/cartpole.py`).
-- TicTacToe against a random player (`games/random_tictactoe.py`).
+- TicTacToe (`games/random_tictactoe.py`).
 
 #### Implementing other games
 

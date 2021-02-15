@@ -1,22 +1,17 @@
 import random
 import pickle
 import string
-import datetime
 import argparse
 import tensorflow as tf
 from tensorboard.plugins.hparams import api as hp
-from collections import namedtuple
 from importlib import import_module
 
-
 # For type annotations
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
-from muzero.muprover_types import Value
-
+from muzero_types import Value
 
 MAXIMUM_FLOAT_VALUE = float('inf')
-KnownBounds = namedtuple('KnownBounds', ['min', 'max'])
 
 
 def disable_gpu():
@@ -25,10 +20,6 @@ def disable_gpu():
     tf.config.set_visible_devices([], "GPU")
     logical_devices = tf.config.list_logical_devices("GPU")
     print("TF logical devices", logical_devices)
-
-
-def timestamp() -> str:
-    return datetime.datetime.now().strftime("%d-%m-%Y--%H-%M")
 
 
 def random_id() -> str:
@@ -43,22 +34,46 @@ def from_bytes_dict(dictionary: Dict[str, bytes]) -> Dict[str, Any]:
     return {key: pickle.loads(value) for key, value in dictionary.items()}
 
 
-class MinMaxStats(object):
-    """A class that holds the min-max values of the tree."""
+class KnownBounds:
+    def __init__(self, minv: Optional[Value], maxv: Value) -> None:
+        """
+        A class to store possible ranges of values (if min is None the range is symmetric about zero, i.e. [-max, max])
+        """
+        self.minv: Optional[Value] = minv
+        self.maxv: Value = maxv
 
-    def __init__(self, known_bounds: Optional[KnownBounds]):
-        self.maximum = known_bounds.max if known_bounds else -MAXIMUM_FLOAT_VALUE
-        self.minimum = known_bounds.min if known_bounds else MAXIMUM_FLOAT_VALUE
+    def endpoints(self) -> Tuple[Value, Value]:
+        if self.minv is None:
+            return Value(-self.maxv), self.maxv
+        else:
+            return self.minv, self.maxv
 
-    def update(self, value: Value):
-        self.maximum = max(self.maximum, value)
-        self.minimum = min(self.minimum, value)
+
+class MinMaxStats:
+    """
+    A class that holds the min-max values of the tree.
+    If min is None the values are considered to be symmetric around zero.
+    """
+
+    def __init__(self, known_bounds: Optional[KnownBounds]) -> None:
+        self.known_bounds: Optional[KnownBounds] = known_bounds
+        self.maximum: Value = Value(-MAXIMUM_FLOAT_VALUE)
+        self.minimum: Value = Value(MAXIMUM_FLOAT_VALUE)
+
+    def update(self, value: Value) -> None:
+        if self.known_bounds is None:
+            self.maximum = max(self.maximum, value)
+            self.minimum = min(self.minimum, value)
 
     def normalize(self, value: Value) -> float:
-        if self.maximum > self.minimum:
+        if self.known_bounds is None:
             # We normalize only when we have set the maximum and minimum values.
-            return (value - self.minimum) / (self.maximum - self.minimum)
-        return value
+            if self.maximum == self.minimum:
+                return value
+            a, b = self.minimum, self.maximum
+        else:
+            a, b = self.known_bounds.endpoints()
+        return (value - a) / (b - a)
 
 
 class CommandLineParser(argparse.ArgumentParser):
@@ -112,7 +127,7 @@ class CommandLineParser(argparse.ArgumentParser):
             
         if self.game:
             try:
-                game_module = import_module(f'muzero.games.{args.game}')
+                game_module = import_module(f'games.{args.game}')
             except ModuleNotFoundError:
                 self.error(f'Choice of --game {args.game} is invalid!')
             else:

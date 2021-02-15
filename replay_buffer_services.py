@@ -2,21 +2,21 @@ import grpc
 import tensorflow as tf
 from concurrent import futures
 
-from muzero.protos import replay_buffer_pb2
-from muzero.protos import replay_buffer_pb2_grpc
+from protos import replay_buffer_pb2
+from protos import replay_buffer_pb2_grpc
 
 # For type annotations
 from typing import Iterable, Tuple, Dict, Any
 
-from muzero.utils import CommandLineParser
+from utils import CommandLineParser
 
-from muzero.replay_buffer import ReplayBuffer
-from muzero.game_services import history_to_protobuf, history_from_protobuf
-from muzero.exceptions import MuProverError
+from replay_buffer import ReplayBuffer
+from game_services import history_to_protobuf, history_from_protobuf
+from exceptions import MuZeroError
 
-from muzero.config import MuZeroConfig
-from muzero.game import GameHistory
-from muzero.muprover_types import ObservationBatch, ActionBatch, ValueBatch, PolicyBatch
+from config import MuZeroConfig
+from game import GameHistory
+from muzero_types import ObservationBatch, ActionBatch, ValueBatch, PolicyBatch
 
 
 class ReplayBufferServer(replay_buffer_pb2_grpc.ReplayBufferServicer):
@@ -105,7 +105,7 @@ class RemoteReplayBuffer:
         request = history_to_protobuf(game_history)
         response = self.remote_replay_buffer.SaveHistory(request)
         if not response.num_games:
-            raise MuProverError(message='Could not save game history!')
+            raise MuZeroError(message='Could not save game history!')
 
     def as_dataset(self,
                    batch_size: int

@@ -1,8 +1,8 @@
 # For type annotations
 from typing import List, Dict, Optional, Any
 
-from muzero.muprover_types import State, Observation, Value, Policy, ValueBatch, PolicyBatch, ActionBatch, Action
-from muzero.environment import Environment
+from muzero_types import State, Observation, Player, Action, Value, Policy, ValueBatch, PolicyBatch, ActionBatch
+from environment import Environment
 
 
 class GameHistory:
@@ -12,7 +12,8 @@ class GameHistory:
     """
 
     def __init__(self) -> None:
-        self.states: List[State] = []
+        self.observations: List[Observation] = []
+        self.to_plays: List[Player] = []
         self.actions: List[Action] = []
         self.rewards: List[Value] = []
         self.root_values: List[Value] = []
@@ -30,7 +31,7 @@ class GameHistory:
         """
         TODO: If necessary, stack multiple states to create an observation.
         """
-        return Observation(self.states[index])
+        return self.observations[index]
 
     def __repr__(self) -> str:
         return 'Game({})'.format(', '.join(map(str, self.actions)))
@@ -47,21 +48,28 @@ class Game:
     def __init__(self, environment: Environment) -> None:
         self.environment: Environment = environment
         self.history: GameHistory = GameHistory()
-        self.history.states.append(self.environment.reset())
+
+        self.state: State = self.environment.reset()
+        self.history.observations.append(self.state.observation)
+        self.history.to_plays.append(self.state.to_play)
         self.ended: bool = False
 
+    def to_play(self) -> Player:
+        return self.state.to_play
+
     def legal_actions(self) -> List[Action]:
-        return self.environment.legal_actions()
+        return self.state.legal_actions
 
     def terminal(self) -> bool:
         return self.ended
 
     def apply(self, action: Action) -> None:
-        state, reward, self.ended, info = self.environment.step(action)
-        self.history.states.append(state)
+        self.state, reward, self.ended, info = self.environment.step(action)
+        self.history.observations.append(self.state.observation)
+        self.history.to_plays.append(self.state.to_play)
         self.history.actions.append(action)
         self.history.rewards.append(reward)
 
-    def store_search_statistics(self, policy: Policy, value: Value) -> None:
+    def store_search_statistics(self, value: Value, policy: Policy) -> None:
         self.history.root_values.append(value)
         self.history.policies.append(policy)

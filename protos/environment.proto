@@ -13,7 +13,8 @@ service RemoteEnvironment {
 
 message State {
 	TensorProto observation = 1;
-	repeated int32 legal_actions = 2;
+	int32 to_play = 2;
+	repeated int32 legal_actions = 3;
 }
 
 message InitializationRequest {

@@ -1,15 +1,15 @@
 from math import log
 
 from dataclasses import dataclass
-from muzero.utils import hparams_safe_update, scalar_to_support, support_to_scalar
+from utils import hparams_safe_update, scalar_to_support, support_to_scalar
 
 # For type annotations
 from typing import Dict, Callable, Any, Optional
 import tensorflow as tf
 
-from muzero.muprover_types import Action, Value
-from muzero.environment import Environment
-from muzero.utils import KnownBounds
+from muzero_types import Action, Value
+from environment import Environment
+from utils import KnownBounds
 
 
 class ScalarConfig:
@@ -32,11 +32,11 @@ class ScalarConfig:
             self.to_scalar: Callable[[tf.Tensor], tf.Tensor] = self.support_to_scalar
 
     def scalar_to_support(self, tensor: tf.Tensor) -> tf.Tensor:
-        a, b = self.known_bounds if self.known_bounds is not None else (0.0, 1.0)
+        a, b = self.known_bounds.endpoints() if self.known_bounds is not None else (0.0, 1.0)
         return scalar_to_support((tensor-a)/(b-a), support_size=self.support_size)
 
     def support_to_scalar(self, tensor: tf.Tensor) -> tf.Tensor:
-        a, b = self.known_bounds if self.known_bounds is not None else (0.0, 1.0)
+        a, b = self.known_bounds.endpoints() if self.known_bounds is not None else (0.0, 1.0)
         return a + (b-a)*support_to_scalar(tensor, support_size=self.support_size)
 
 
@@ -49,6 +49,7 @@ class GameConfig:
     environment_class: Callable[..., Environment]
     environment_parameters: Dict[str, Any]
     action_space_size: int
+    num_players: int
     discount: float
 
 

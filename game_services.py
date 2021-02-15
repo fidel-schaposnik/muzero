@@ -1,18 +1,19 @@
 import tensorflow as tf
 
-from muzero.protos import replay_buffer_pb2
-from muzero.game import GameHistory
-from muzero.utils import to_bytes_dict, from_bytes_dict
+from protos import replay_buffer_pb2
+from game import GameHistory
+from utils import to_bytes_dict, from_bytes_dict
 
 # For type annotations
 from typing import List
 
-from muzero.muprover_types import State, Policy, Value, Action
+from muzero_types import Observation, Policy, Value, Action, Player
 
 
 def history_to_protobuf(game_history: GameHistory) -> replay_buffer_pb2.GameHistory:
     message = replay_buffer_pb2.GameHistory()
-    message.states.extend([tf.make_tensor_proto(state) for state in game_history.states])
+    message.observations.extend([tf.make_tensor_proto(obs) for obs in game_history.observations])
+    message.to_plays.extend(game_history.to_plays)
     message.actions.extend(game_history.actions)
     message.rewards.extend(game_history.rewards)
     message.root_values.extend(game_history.root_values)
@@ -23,7 +24,8 @@ def history_to_protobuf(game_history: GameHistory) -> replay_buffer_pb2.GameHist
 
 def history_from_protobuf(message: replay_buffer_pb2.GameHistory) -> GameHistory:
     game_history = GameHistory()
-    game_history.states = [State(tf.constant(tf.make_ndarray(state))) for state in message.states]
+    game_history.observations = [Observation(tf.constant(tf.make_ndarray(obs))) for obs in message.observations]
+    game_history.to_plays = [Player(id) for id in message.to_plays]
     game_history.actions = [Action(index) for index in message.actions]
     game_history.rewards = [Value(reward) for reward in message.rewards]
     game_history.root_values = [Value(root_value) for root_value in message.root_values]

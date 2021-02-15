@@ -1,4 +1,4 @@
-class MuProverError(Exception):
+class MuZeroError(Exception):
     """
     Base class for exceptions in MuProver.
     """
@@ -10,7 +10,7 @@ class MuProverError(Exception):
         return self.message
 
 
-class MuProverImplementationError(MuProverError):
+class MuZeroImplementationError(MuZeroError):
     """
     Exception for un-implemented methods in base classes.
     """
@@ -21,7 +21,7 @@ class MuProverImplementationError(MuProverError):
         self.class_name: str = class_name
 
 
-class MuProverEnvironmentError(MuProverError):
+class MuZeroEnvironmentError(MuZeroError):
     """
     Exception for the environment classes.
     """

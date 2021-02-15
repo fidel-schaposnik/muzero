@@ -4,19 +4,19 @@ import tensorflow as tf
 import numpy as np
 from math import isnan
 
-from muzero.game import Game
-from muzero.exceptions import MuProverImplementationError
-from muzero.utils import random_id, MinMaxStats
+from game import Game
+from exceptions import MuZeroImplementationError
+from utils import random_id, MinMaxStats
 
 # For type annotations
 from typing import Optional, Dict, List, Tuple, Union
 
-from muzero.muprover_types import Policy, Value, Observation, ObservationBatch, Action
-from muzero.game import GameHistory
-from muzero.environment import Environment
-from muzero.network import Network, NetworkOutput
-from muzero.network_services import RemoteNetwork
-from muzero.config import MuZeroConfig
+from muzero_types import Player, Action, Policy, Value, Observation, ObservationBatch, ActionBatch
+from game import GameHistory
+from environment import Environment
+from network import Network, NetworkOutput
+from network_services import RemoteNetwork
+from config import MuZeroConfig
 
 
 class Agent:
@@ -24,7 +24,8 @@ class Agent:
     An agent playing a game in an Environment.
     """
 
-    def __init__(self, agent_id: Optional[str] = None) -> None:
+    def __init__(self, config: MuZeroConfig, agent_id: Optional[str] = None) -> None:
+        self.config: MuZeroConfig = config
         self.agent_id: str = agent_id if agent_id else 'agent_'+random_id()
 
     def play_game(self, environment: Environment) -> GameHistory:
@@ -46,7 +47,7 @@ class Agent:
         """
         Choose a move to play in the Game.
         """
-        raise MuProverImplementationError('make_move', 'Agent')
+        raise MuZeroImplementationError('make_move', 'Agent')
 
     def fill_metadata(self) -> Dict[str, str]:
         """
@@ -64,7 +65,9 @@ class RandomAgent(Agent):
         legal_actions = game.legal_actions()
         policy = np.zeros(game.environment.action_space_size)
         policy[legal_actions] = 1 / len(legal_actions)
-        game.store_search_statistics(Policy(tf.constant(policy)), Value(random.random()))
+        a, b = self.config.value_config.known_bounds.endpoints() if self.config.value_config.known_bounds else (0, 1)
+        value = a + (a - b)*random.random()
+        game.store_search_statistics(Value(value), Policy(tf.constant(policy)))
         return random.choice(legal_actions)
 
 
@@ -74,8 +77,8 @@ class NetworkAgent(Agent):
     This is roughly like MCTSAgent with num_simulations = 0.
     """
 
-    def __init__(self, network: Network, temperature: float = 0.0, debug: bool = False) -> None:
-        super().__init__()
+    def __init__(self, config: MuZeroConfig, network: Network, temperature: float = 0.0, debug: bool = False) -> None:
+        super().__init__(config=config)
         self.network: Network = network
         self.temperature: float = temperature
         self.debug: bool = debug
@@ -87,7 +90,7 @@ class NetworkAgent(Agent):
 
         legal_actions = game.legal_actions()
         policy = network_output.masked_policy(legal_actions)
-        game.store_search_statistics(Policy(tf.constant(policy)), network_output.value)
+        game.store_search_statistics(network_output.value, Policy(tf.constant(policy)))
 
         if self.temperature == 0:
             _, action = max(zip(policy[legal_actions], legal_actions))
@@ -98,12 +101,13 @@ class NetworkAgent(Agent):
 
 
 class Node:
-    def __init__(self, prior: float = 1.0, parent: Optional['Node'] = None) -> None:
+    def __init__(self, parent: Optional['Node'] = None, prior: float = 1.0) -> None:
         self.parent: Optional[Node] = parent
         self.prior: float = prior
         self.children: Dict[Action, Node] = {}
         self.hidden_state: Optional[Observation] = None
         self.reward: Optional[Value] = None
+        self.to_play: Optional[Player] = None
 
         self.value_sum: Value = Value(0.0)
         self.visit_count: int = 0
@@ -132,15 +136,20 @@ class MCTSAgent(Agent):
     """
     Use Monte-Carlo Tree-Search to select moves.
     """
-    def __init__(self, config: MuZeroConfig,
+    def __init__(self,
+                 config: MuZeroConfig,
                  network: Union[Network, RemoteNetwork],
                  agent_id: Optional[str] = None,
                  debug: bool = False
                  ) -> None:
-        super().__init__(agent_id=agent_id)
+        super().__init__(config=config, agent_id=agent_id)
         self.config: MuZeroConfig = config
         self.network: Network = network
         self.debug: bool = debug
+
+        self.effective_discount: float = self.config.game_config.discount
+        if config.game_config.num_players == 2:
+            self.effective_discount *= -1
 
     @staticmethod
     def expand_node(node: Node, actions: List[Action], network_output: NetworkOutput) -> None:
@@ -176,14 +185,14 @@ class MCTSAgent(Agent):
         return action, child
 
     def ucb_score(self, node: Node, min_max_stats: MinMaxStats) -> float:
-        exploitation_score = self.config.mcts_config.default_value if isnan(node.value) else node.value
+        exploitation_score = self.config.mcts_config.default_value if isnan(node.value) else node.reward + self.effective_discount * node.value
         exploration_score = node.prior * self.config.exploration_function(node.parent.visit_count, node.visit_count)
         return min_max_stats.normalize(exploitation_score) + exploration_score
 
     def backpropagate(self, node: Node, value: Value, min_max_stats: MinMaxStats) -> None:
         while node is not None:
             min_max_stats.update(node.update_value(value))
-            value = node.reward + self.config.game_config.discount * value if node.reward is not None else Value(float('nan'))
+            value = node.reward + self.effective_discount * value if node.reward is not None else Value(float('nan'))
             node = node.parent
 
     def run_mcts(self, root: Node, min_max_stats: MinMaxStats) -> None:
@@ -193,9 +202,12 @@ class MCTSAgent(Agent):
             action, leaf = self.select_leaf(root, min_max_stats)
 
             batch_hidden_state = ObservationBatch(tf.expand_dims(leaf.parent.hidden_state, axis=0))
-            batch_network_output = self.network.recurrent_inference(batch_hidden_state, tf.constant([action]))
+            batch_action = ActionBatch(tf.constant([action]))
+            batch_network_output = self.network.recurrent_inference(batch_hidden_state, batch_action)
             network_output = batch_network_output.split_batch()[0]
-            self.expand_node(node=leaf, actions=self.config.action_space(), network_output=network_output)
+            self.expand_node(node=leaf,
+                             actions=self.config.action_space(),
+                             network_output=network_output)
             self.backpropagate(leaf, network_output.value, min_max_stats)
 
     def select_action(self, node: Node, num_moves: int) -> Action:
@@ -216,7 +228,7 @@ class MCTSAgent(Agent):
 
         action_space = self.config.action_space()
         policy = [root.children[a].visit_count / root.visit_count if a in root.children else 0 for a in action_space]
-        game.store_search_statistics(Policy(tf.constant(policy)), root.value)
+        game.store_search_statistics(root.value, Policy(tf.constant(policy)))
         return self.select_action(root, len(game.history))
 
     def fill_metadata(self) -> Dict[str, str]:

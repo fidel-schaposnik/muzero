@@ -1,12 +1,12 @@
 import tensorflow as tf
 
-from muzero.config import MuZeroConfig, GameConfig, ReplayBufferConfig, MCTSConfig, NetworkConfig, TrainingConfig, ScalarConfig
-from muzero.utils import KnownBounds
-from muzero.environment import OpenAIEnvironment
-from muzero.network import Network, binary_plane_encoder, scalar_to_support_model
+from config import MuZeroConfig, GameConfig, ReplayBufferConfig, MCTSConfig, NetworkConfig, TrainingConfig, ScalarConfig
+from utils import KnownBounds
+from environment import OpenAIEnvironment
+from network import Network, binary_plane_encoder, scalar_to_support_model
 
 # For type annotations
-from muzero.muprover_types import Value
+from muzero_types import Value
 
 
 def make_config() -> MuZeroConfig:
@@ -14,12 +14,11 @@ def make_config() -> MuZeroConfig:
                              environment_class=OpenAIEnvironment,
                              environment_parameters={'gym_id': 'CartPole-v1'},
                              action_space_size=2,
-                             discount=0.99
-                             )
+                             num_players=1,
+                             discount=0.99)
 
     replay_buffer_config = ReplayBufferConfig(window_size=int(1e3),
-                                              prefetch_buffer_size=10
-                                              )
+                                              prefetch_buffer_size=10)
 
     mcts_config = MCTSConfig(max_moves=500,
                              root_dirichlet_alpha=1.0,
@@ -27,15 +26,13 @@ def make_config() -> MuZeroConfig:
                              num_simulations=4,
                              temperature=1.0,
                              freezing_moves=50,
-                             default_value=Value(50.0)
-                             )
+                             default_value=Value(50.0))
 
     network_config = NetworkConfig(network_class=CartPoleNetwork,
                                    regularizer=tf.keras.regularizers.l2(l=1e-4),
                                    hidden_state_size=128,
                                    hidden_size=128,
-                                   support_size=100
-                                   )
+                                   support_size=100)
 
     training_config = TrainingConfig(optimizer=tf.keras.optimizers.Adam(),
                                      batch_size=128,
@@ -44,15 +41,13 @@ def make_config() -> MuZeroConfig:
                                      replay_buffer_loginterval=int(1e2),
                                      num_unroll_steps=2,
                                      td_steps=100,
-                                     steps_per_execution=1
-                                     )
+                                     steps_per_execution=1)
 
-    reward_config = ScalarConfig(known_bounds=KnownBounds(min=0.0, max=1.0),
+    reward_config = ScalarConfig(known_bounds=KnownBounds(minv=Value(0.0), maxv=Value(1.0)),
                                  support_size=None,
-                                 loss_decay=1.0
-                                 )
+                                 loss_decay=1.0)
 
-    value_config = ScalarConfig(known_bounds=KnownBounds(min=0.0, max=100.0),
+    value_config = ScalarConfig(known_bounds=KnownBounds(minv=Value(0.0), maxv=Value(100.0)),
                                 support_size=100,
                                 loss_decay=0.1)
 

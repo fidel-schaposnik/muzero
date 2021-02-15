@@ -1,10 +1,10 @@
 from grpc import RpcError
 
-from muzero.agent import MCTSAgent
-from muzero.utils import CommandLineParser
-from muzero.replay_buffer_services import RemoteReplayBuffer
-from muzero.network_services import RemoteNetwork
-from muzero.environment_services import RemoteEnvironment
+from agent import MCTSAgent
+from utils import CommandLineParser
+from replay_buffer_services import RemoteReplayBuffer
+from network_services import RemoteNetwork
+from environment_services import RemoteEnvironment
 
 
 def main():

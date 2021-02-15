@@ -2,7 +2,7 @@
 """Client and server classes corresponding to protobuf-defined services."""
 import grpc
 
-from muzero.protos import replay_buffer_pb2 as muzero_dot_protos_dot_replay__buffer__pb2
+from protos import replay_buffer_pb2 as protos_dot_replay__buffer__pb2
 
 
 class ReplayBufferStub(object):
@@ -16,33 +16,33 @@ class ReplayBufferStub(object):
         """
         self.NumGames = channel.unary_unary(
                 '/tensorflow.muprover.ReplayBuffer/NumGames',
-                request_serializer=muzero_dot_protos_dot_replay__buffer__pb2.Empty.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
+                request_serializer=protos_dot_replay__buffer__pb2.Empty.SerializeToString,
+                response_deserializer=protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
                 )
         self.SaveHistory = channel.unary_unary(
                 '/tensorflow.muprover.ReplayBuffer/SaveHistory',
-                request_serializer=muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
+                request_serializer=protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
+                response_deserializer=protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
                 )
         self.SaveMultipleHistory = channel.stream_unary(
                 '/tensorflow.muprover.ReplayBuffer/SaveMultipleHistory',
-                request_serializer=muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
+                request_serializer=protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
+                response_deserializer=protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
                 )
         self.SampleBatch = channel.unary_stream(
                 '/tensorflow.muprover.ReplayBuffer/SampleBatch',
-                request_serializer=muzero_dot_protos_dot_replay__buffer__pb2.MiniBatchRequest.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.MiniBatchResponse.FromString,
+                request_serializer=protos_dot_replay__buffer__pb2.MiniBatchRequest.SerializeToString,
+                response_deserializer=protos_dot_replay__buffer__pb2.MiniBatchResponse.FromString,
                 )
         self.Stats = channel.unary_unary(
                 '/tensorflow.muprover.ReplayBuffer/Stats',
-                request_serializer=muzero_dot_protos_dot_replay__buffer__pb2.StatsRequest.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.StatsResponse.FromString,
+                request_serializer=protos_dot_replay__buffer__pb2.StatsRequest.SerializeToString,
+                response_deserializer=protos_dot_replay__buffer__pb2.StatsResponse.FromString,
                 )
         self.BackupBuffer = channel.unary_stream(
                 '/tensorflow.muprover.ReplayBuffer/BackupBuffer',
-                request_serializer=muzero_dot_protos_dot_replay__buffer__pb2.Empty.SerializeToString,
-                response_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.FromString,
+                request_serializer=protos_dot_replay__buffer__pb2.Empty.SerializeToString,
+                response_deserializer=protos_dot_replay__buffer__pb2.GameHistory.FromString,
                 )
 
 
@@ -90,33 +90,33 @@ def add_ReplayBufferServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'NumGames': grpc.unary_unary_rpc_method_handler(
                     servicer.NumGames,
-                    request_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.Empty.FromString,
-                    response_serializer=muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.SerializeToString,
+                    request_deserializer=protos_dot_replay__buffer__pb2.Empty.FromString,
+                    response_serializer=protos_dot_replay__buffer__pb2.NumGamesResponse.SerializeToString,
             ),
             'SaveHistory': grpc.unary_unary_rpc_method_handler(
                     servicer.SaveHistory,
-                    request_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.FromString,
-                    response_serializer=muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.SerializeToString,
+                    request_deserializer=protos_dot_replay__buffer__pb2.GameHistory.FromString,
+                    response_serializer=protos_dot_replay__buffer__pb2.NumGamesResponse.SerializeToString,
             ),
             'SaveMultipleHistory': grpc.stream_unary_rpc_method_handler(
                     servicer.SaveMultipleHistory,
-                    request_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.FromString,
-                    response_serializer=muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.SerializeToString,
+                    request_deserializer=protos_dot_replay__buffer__pb2.GameHistory.FromString,
+                    response_serializer=protos_dot_replay__buffer__pb2.NumGamesResponse.SerializeToString,
             ),
             'SampleBatch': grpc.unary_stream_rpc_method_handler(
                     servicer.SampleBatch,
-                    request_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.MiniBatchRequest.FromString,
-                    response_serializer=muzero_dot_protos_dot_replay__buffer__pb2.MiniBatchResponse.SerializeToString,
+                    request_deserializer=protos_dot_replay__buffer__pb2.MiniBatchRequest.FromString,
+                    response_serializer=protos_dot_replay__buffer__pb2.MiniBatchResponse.SerializeToString,
             ),
             'Stats': grpc.unary_unary_rpc_method_handler(
                     servicer.Stats,
-                    request_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.StatsRequest.FromString,
-                    response_serializer=muzero_dot_protos_dot_replay__buffer__pb2.StatsResponse.SerializeToString,
+                    request_deserializer=protos_dot_replay__buffer__pb2.StatsRequest.FromString,
+                    response_serializer=protos_dot_replay__buffer__pb2.StatsResponse.SerializeToString,
             ),
             'BackupBuffer': grpc.unary_stream_rpc_method_handler(
                     servicer.BackupBuffer,
-                    request_deserializer=muzero_dot_protos_dot_replay__buffer__pb2.Empty.FromString,
-                    response_serializer=muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
+                    request_deserializer=protos_dot_replay__buffer__pb2.Empty.FromString,
+                    response_serializer=protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -140,8 +140,8 @@ class ReplayBuffer(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/tensorflow.muprover.ReplayBuffer/NumGames',
-            muzero_dot_protos_dot_replay__buffer__pb2.Empty.SerializeToString,
-            muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
+            protos_dot_replay__buffer__pb2.Empty.SerializeToString,
+            protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -157,8 +157,8 @@ class ReplayBuffer(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/tensorflow.muprover.ReplayBuffer/SaveHistory',
-            muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
-            muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
+            protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
+            protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -174,8 +174,8 @@ class ReplayBuffer(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.stream_unary(request_iterator, target, '/tensorflow.muprover.ReplayBuffer/SaveMultipleHistory',
-            muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
-            muzero_dot_protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
+            protos_dot_replay__buffer__pb2.GameHistory.SerializeToString,
+            protos_dot_replay__buffer__pb2.NumGamesResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -191,8 +191,8 @@ class ReplayBuffer(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_stream(request, target, '/tensorflow.muprover.ReplayBuffer/SampleBatch',
-            muzero_dot_protos_dot_replay__buffer__pb2.MiniBatchRequest.SerializeToString,
-            muzero_dot_protos_dot_replay__buffer__pb2.MiniBatchResponse.FromString,
+            protos_dot_replay__buffer__pb2.MiniBatchRequest.SerializeToString,
+            protos_dot_replay__buffer__pb2.MiniBatchResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -208,8 +208,8 @@ class ReplayBuffer(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/tensorflow.muprover.ReplayBuffer/Stats',
-            muzero_dot_protos_dot_replay__buffer__pb2.StatsRequest.SerializeToString,
-            muzero_dot_protos_dot_replay__buffer__pb2.StatsResponse.FromString,
+            protos_dot_replay__buffer__pb2.StatsRequest.SerializeToString,
+            protos_dot_replay__buffer__pb2.StatsResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
@@ -225,7 +225,7 @@ class ReplayBuffer(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.unary_stream(request, target, '/tensorflow.muprover.ReplayBuffer/BackupBuffer',
-            muzero_dot_protos_dot_replay__buffer__pb2.Empty.SerializeToString,
-            muzero_dot_protos_dot_replay__buffer__pb2.GameHistory.FromString,
+            protos_dot_replay__buffer__pb2.Empty.SerializeToString,
+            protos_dot_replay__buffer__pb2.GameHistory.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

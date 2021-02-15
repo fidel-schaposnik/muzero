@@ -2,13 +2,13 @@ import os
 import numpy as np
 import tensorflow as tf
 
-from muzero.config import MuZeroConfig
-from muzero.utils import scalar_to_support
+from config import MuZeroConfig
+from utils import scalar_to_support
 
 # For type annotations
 from typing import List, Tuple, Callable, Iterable, Optional
 
-from muzero.muprover_types import Value, Policy, Action, Observation, ValueBatch, PolicyBatch, ActionBatch, ObservationBatch
+from muzero_types import Value, Policy, Action, Observation, ValueBatch, PolicyBatch, ActionBatch, ObservationBatch
 
 
 def one_hot_tensor_encoder(state_shape: Iterable[Optional[int]],

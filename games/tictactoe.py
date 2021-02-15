@@ -1,24 +1,24 @@
-import random
 import numpy as np
 import tensorflow as tf
 
-from muzero.config import MuZeroConfig, GameConfig, ReplayBufferConfig, MCTSConfig, NetworkConfig, TrainingConfig, ScalarConfig
-from muzero.utils import KnownBounds
-from muzero.environment import Environment
-from muzero.exceptions import MuProverEnvironmentError
-from muzero.network import Network, one_hot_tensor_encoder, dummy_model
+from config import MuZeroConfig, GameConfig, ReplayBufferConfig, MCTSConfig, NetworkConfig, TrainingConfig, ScalarConfig
+from utils import KnownBounds
+from environment import Environment
+from exceptions import MuZeroEnvironmentError
+from network import Network, one_hot_tensor_encoder, dummy_model
 
 # For type annotations
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
-from muzero.muprover_types import State, Value, Action
+from muzero_types import State, Value, Action, Observation, Player
 
 
 def make_config() -> MuZeroConfig:
-    game_config = GameConfig(name='RandomTicTacToe',
-                             environment_class=RandomTicTacToeEnvironment,
+    game_config = GameConfig(name='TicTacToe',
+                             environment_class=TicTacToeEnvironment,
                              environment_parameters={},
                              action_space_size=9,
+                             num_players=2,
                              discount=1.0
                              )
 
@@ -32,7 +32,7 @@ def make_config() -> MuZeroConfig:
                              num_simulations=20,
                              temperature=1.0,
                              freezing_moves=9,
-                             default_value=Value(0.5)
+                             default_value=Value(0.0)
                              )
 
     network_config = NetworkConfig(network_class=TicTacToeNetwork,
@@ -51,12 +51,11 @@ def make_config() -> MuZeroConfig:
                                      steps_per_execution=1
                                      )
 
-    reward_config = ScalarConfig(known_bounds=KnownBounds(min=-1.0, max=1.0),
+    reward_config = ScalarConfig(known_bounds=KnownBounds(minv=Value(0.0), maxv=Value(1.0)),
                                  support_size=None,
-                                 loss_decay=0.0
-                                 )
+                                 loss_decay=0.0)
 
-    value_config = ScalarConfig(known_bounds=KnownBounds(min=-1.0, max=1.0),
+    value_config = ScalarConfig(known_bounds=KnownBounds(minv=None, maxv=Value(1.0)),
                                 support_size=None,
                                 loss_decay=4.0)
 
@@ -69,26 +68,21 @@ def make_config() -> MuZeroConfig:
                         reward_config=reward_config)
 
 
-class RandomTicTacToeEnvironment(Environment):
+class TicTacToeEnvironment(Environment):
     """
     The environment class of tic-tac-toe.
     """
+    NO_REWARD: Value = Value(0.0)
+    WINNING_MOVE: Value = Value(1.0)
 
-    def __init__(self, player_choice: Optional[tf.Tensor] = None) -> None:
-        super().__init__(action_space_size=9)
-        self.player_choice = player_choice
+    def __init__(self) -> None:
+        super().__init__(action_space_size=9, num_players=2)
 
         # Game state
         self.board: Optional[np.ndarray] = None  # numpy array of shape (3,3), -1 if empty or player_id if filled
+        self.to_play: Optional[int] = None       # player_id for the player who has to move next
         self.steps: Optional[int] = None         # number of steps taken in this episode
         self.ended: Optional[bool] = None        # flag to mark the episode has finished
-        self.winner: Optional[int] = None        # contains the player_id of the winner if the episode has finished
-        self.player_id: Optional[int] = None     # player_id of the player (the opponent is a random player)
-
-        # Game results
-        self.WIN: Value = Value(1.0)
-        self.DRAW: Value = Value(0.0)
-        self.LOSE: Value = Value(-1.0)
 
     def __repr__(self) -> str:
         colors = {-1: '.', 0: 'X', 1: 'O'}
@@ -100,65 +94,58 @@ class RandomTicTacToeEnvironment(Environment):
                 result += '\n'
         return result
 
-    def _get_state(self) -> State:
-        return tf.stack([tf.where(self.board == 0, 1., 0.),
-                         tf.where(self.board == 1, 1., 0.),
-                         self.player_id * tf.ones(shape=(3, 3))], axis=-1)
-
-    def _check_last_move(self, player_id: int) -> bool:
-        for i in range(3):
-            if np.all(self.board[i, :] == player_id) or np.all(self.board[:, i] == player_id):
-                self.ended = True
-        if np.all(self.board.diagonal() == player_id) or np.all(np.flip(self.board, axis=0).diagonal() == player_id):
-            self.ended = True
-        if self.ended:
-            self.winner = player_id
-        elif self.steps == 9:
-            self.ended = True
-        return self.ended
-
-    def _make_random_move(self, player_id: int) -> None:
-        valid_moves = [(i, j) for i in range(3) for j in range(3) if self.board[i, j] == -1]
-        row, col = random.choice(valid_moves)
-        self.board[row, col] = player_id
-        self.steps += 1
-        self._check_last_move(player_id)
-
-    def step(self, action: Action) -> Tuple[State, Value, bool, dict]:
-        if not self.is_legal_action(action):
-            raise MuProverEnvironmentError(f'cannot perform action {action}')
-
-        # Find the position of this move
-        row = action // 3
-        col = action % 3
-
-        # Make the move
-        self.board[row, col] = self.player_id
-        self.steps += 1
-
-        self._check_last_move(self.player_id)
-        if not self.ended:
-            self._make_random_move(1-self.player_id)
-
-        reward = self.DRAW if self.winner is None else (self.WIN if self.winner == self.player_id else self.LOSE)
-        return self._get_state(), reward, self.ended, {}
-
-    def reset(self) -> State:
-        self.board = -np.ones(shape=(3, 3), dtype=np.int)  # -1 is empty, player_id if filled
-        self.steps = 0
-        self.ended = False
-        self.winner = None
-        self.player_id = self.player_choice.numpy() if self.player_choice is not None else random.randrange(2)
-        if self.player_id == 1:
-            self._make_random_move(0)
-        return self._get_state()
-
-    def is_legal_action(self, action: Action) -> bool:
+    def _is_legal_action(self, action: Action) -> bool:
         if self.ended or action not in range(9):
             return False
         row = action // 3
         col = action % 3
         return self.board[row, col] == -1
+
+    def _legal_actions(self) -> List[Action]:
+        return [Action(i) for i in range(9) if self._is_legal_action(Action(i))]
+
+    def _get_state(self) -> State:
+        observation = tf.stack([tf.where(self.board == 0, 1., 0.),
+                                tf.where(self.board == 1, 1., 0.),
+                                self.to_play * tf.ones(shape=(3, 3))], axis=-1)
+        return State(Observation(observation), Player(self.to_play), self._legal_actions())
+
+    def _compute_reward(self) -> Value:
+        for i in range(3):
+            if np.all(self.board[i, :] == self.to_play) or np.all(self.board[:, i] == self.to_play):
+                self.ended = True
+        if np.all(self.board.diagonal() == self.to_play) or np.all(np.flip(self.board, axis=0).diagonal() == self.to_play):
+            self.ended = True
+        return self.WINNING_MOVE if self.ended else self.NO_REWARD
+
+    def step(self, action: Action) -> Tuple[State, Value, bool, dict]:
+        if not self._is_legal_action(action):
+            raise MuZeroEnvironmentError(f'cannot perform action {action}')
+
+        # Make the move
+        row = action // 3
+        col = action % 3
+        self.board[row, col] = self.to_play
+
+        # Compute the reward
+        reward = self._compute_reward()
+
+        # Switch players
+        self.to_play = 1-self.to_play
+
+        # Increase step counter to detect draws
+        self.steps += 1
+        if self.steps == 9:
+            self.ended = True
+
+        return self._get_state(), reward, self.ended, {}
+
+    def reset(self) -> State:
+        self.board = -np.ones(shape=(3, 3), dtype=np.int)
+        self.steps = 0
+        self.ended = False
+        self.to_play = 0
+        return self._get_state()
 
 
 class TicTacToeNetwork(Network):

@@ -3,17 +3,17 @@ import tensorflow as tf
 from concurrent import futures
 from threading import RLock
 
-from muzero.environment import Environment
-from muzero.exceptions import MuProverEnvironmentError
-from muzero.utils import CommandLineParser, random_id, to_bytes_dict, from_bytes_dict
-from muzero.protos import environment_pb2
-from muzero.protos import environment_pb2_grpc
+from environment import Environment
+from exceptions import MuZeroEnvironmentError
+from utils import CommandLineParser, random_id, to_bytes_dict, from_bytes_dict
+from protos import environment_pb2
+from protos import environment_pb2_grpc
 
 # For type annotations
-from typing import Tuple, Callable, Dict, List
+from typing import Tuple, Callable, Dict, List, Optional
 
-from muzero.muprover_types import State, Value, Action
-from muzero.config import MuZeroConfig
+from muzero_types import State, Observation, Player, Action, Value
+from config import MuZeroConfig
 
 
 class RemoteEnvironmentServer(environment_pb2_grpc.RemoteEnvironmentServicer):
@@ -27,13 +27,15 @@ class RemoteEnvironmentServer(environment_pb2_grpc.RemoteEnvironmentServicer):
         self.environments_lock: RLock = RLock()
 
     @staticmethod
-    def _make_state(observation, legal_actions):
-        state = environment_pb2.State()
+    def _state_to_protobuf(observation: Observation,
+                           to_play: Player,
+                           legal_actions: List[Action]) -> environment_pb2.State:
+        state = environment_pb2.State(to_play=to_play)
         state.observation.CopyFrom(tf.make_tensor_proto(observation))
         state.legal_actions.extend(legal_actions)
         return state
 
-    def _get_environment(self, environment_id: str):
+    def _get_environment(self, environment_id: str) -> Optional[Environment]:
         with self.environments_lock:
             return self.environments[environment_id] if environment_id in self.environments.keys() else None
 
@@ -71,12 +73,12 @@ class RemoteEnvironmentServer(environment_pb2_grpc.RemoteEnvironmentServicer):
             return environment_pb2.StepResponse(success=False)
 
         try:
-            observation, reward, done, info = environment.step(Action(request.action))
-        except MuProverEnvironmentError:
+            state, reward, done, info = environment.step(Action(request.action))
+        except MuZeroEnvironmentError:
             return environment_pb2.StepResponse(success=False)
         else:
             return environment_pb2.StepResponse(success=True,
-                                                state=self._make_state(observation, environment.legal_actions()),
+                                                state=self._state_to_protobuf(*state),
                                                 reward=reward,
                                                 done=done,
                                                 info=to_bytes_dict(info))
@@ -86,9 +88,8 @@ class RemoteEnvironmentServer(environment_pb2_grpc.RemoteEnvironmentServicer):
         if environment is None:
             return environment_pb2.ResetResponse(success=False)
 
-        observation = environment.reset()
-        return environment_pb2.ResetResponse(success=True,
-                                             state=self._make_state(observation, environment.legal_actions()))
+        state = environment.reset()
+        return environment_pb2.ResetResponse(success=True, state=self._state_to_protobuf(*state))
 
 
 class RemoteEnvironment(Environment):
@@ -97,13 +98,12 @@ class RemoteEnvironment(Environment):
     Behaves exactly like Environment, but is agnostic about how the server deals with the environment.
     """
     def __init__(self, config: MuZeroConfig, ip_port: str) -> None:
-        super().__init__(action_space_size=config.game_config.action_space_size)
+        super().__init__(action_space_size=config.game_config.action_space_size,
+                         num_players=config.game_config.num_players)
 
         self.environment_parameters: Dict[str, bytes] = to_bytes_dict(config.game_config.environment_parameters)
         self.ip_port: str = ip_port
         print(f'game_config.environment_parameters: {config.game_config.environment_parameters}')
-
-        self._legal_actions: List[Action] = []
 
     def __enter__(self) -> 'RemoteEnvironment':
         self._channel = grpc.insecure_channel(self.ip_port)
@@ -112,7 +112,7 @@ class RemoteEnvironment(Environment):
         request = environment_pb2.InitializationRequest(environment_parameters=self.environment_parameters)
         response = self._environment_stub.Initialization(request)
         if not response.success:
-            raise MuProverEnvironmentError(message='failed to initialize remote environment')
+            raise MuZeroEnvironmentError(message='failed to initialize remote environment')
 
         self._environment_id = response.environment_id
         return self
@@ -121,32 +121,33 @@ class RemoteEnvironment(Environment):
         request = environment_pb2.FinalizationRequest(environment_id=self._environment_id)
         response = self._environment_stub.Finalization(request)
         if not response.success:
-            raise MuProverEnvironmentError(message='failed to finalize remote environment')
+            raise MuZeroEnvironmentError(message='failed to finalize remote environment')
         self._channel.close()
         # propagate exceptions
         return False
+
+    @staticmethod
+    def _state_from_protobuf(state: environment_pb2.State) -> State:
+        observation = Observation(tf.constant(tf.make_ndarray(state.observation)))
+        legal_actions = [Action(i) for i in state.legal_actions]
+        return State(observation, Player(state.to_play), legal_actions)
 
     def step(self, action: Action) -> Tuple[State, Value, bool, dict]:
         request = environment_pb2.StepRequest(environment_id=self._environment_id, action=action)
         response = self._environment_stub.Step(request)
         if not response.success:
-            raise MuProverEnvironmentError(f'failed to perform action {action}')
+            raise MuZeroEnvironmentError(f'failed to perform action {action}')
 
-        self._legal_actions = [Action(index) for index in response.state.legal_actions]
         info = from_bytes_dict(response.info)
-        return tf.constant(tf.make_ndarray(response.state.observation)), Value(response.reward), response.done, info
+        return self._state_from_protobuf(response.state), Value(response.reward), response.done, info
 
     def reset(self) -> State:
         request = environment_pb2.ResetRequest(environment_id=self._environment_id)
         response = self._environment_stub.Reset(request)
         if not response.success:
-            raise MuProverEnvironmentError(message='failed to reset the environment')
+            raise MuZeroEnvironmentError(message='failed to reset the environment')
 
-        self._legal_actions = [Action(index) for index in response.state.legal_actions]
-        return tf.constant(tf.make_ndarray(response.state.observation))
-
-    def is_legal_action(self, action: Action) -> bool:
-        return action in self._legal_actions
+        return self._state_from_protobuf(response.state)
 
 
 def main():

@@ -3,11 +3,11 @@ import tensorflow as tf
 from tensorflow_serving.apis import predict_pb2
 from tensorflow_serving.apis import prediction_service_pb2_grpc
 
-from muzero.config import MuZeroConfig
-from muzero.network import BatchNetworkOutput
+from config import MuZeroConfig
+from network import BatchNetworkOutput
 
 # For type annotations
-from muzero.muprover_types import ActionBatch, ObservationBatch, PolicyBatch, ValueBatch
+from muzero_types import ActionBatch, ObservationBatch, PolicyBatch, ValueBatch
 
 
 class RemoteNetwork:
