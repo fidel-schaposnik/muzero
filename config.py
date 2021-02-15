@@ -1,102 +1,172 @@
-from math import log, sqrt
-from environment import Action
+from math import log
 
-class ReplayBufferConfig:
+from dataclasses import dataclass
+from muzero.utils import hparams_safe_update, scalar_to_support, support_to_scalar
+
+# For type annotations
+from typing import Dict, Callable, Any, Optional
+import tensorflow as tf
+
+from muzero.muprover_types import Action, Value
+from muzero.environment import Environment
+from muzero.utils import KnownBounds
+
+
+class ScalarConfig:
     def __init__(self,
-                 window_size
-                 ):
-        self.window_size = window_size
+                 known_bounds: Optional[KnownBounds],
+                 support_size: Optional[int],
+                 loss_decay: float
+                 ) -> None:
+        self.known_bounds: Optional[KnownBounds] = known_bounds
+        self.support_size: Optional[int] = support_size
+        self.loss_decay: float = loss_decay
 
-
-class GameConfig:
-    def __init__(self,
-                 name,
-                 environment_class,
-                 environment_parameters,
-                 num_players,
-                 action_space_size,
-                 discount):
-        self.name = name
-        self.environment_class = environment_class
-        self.environment_parameters = environment_parameters
-        self.num_players = num_players
-        self.action_space_size = action_space_size
-        self.discount = discount
-
-        self.action_space = [Action(index) for index in range(action_space_size)]
-
-
-class TrainingConfig:
-    def __init__(self,
-                 game_config,
-                 batch_size,
-                 num_unroll_steps,
-                 td_steps,
-                 optimizer,
-                 training_steps,
-                 checkpoint_interval,
-                 value_loss_decay,
-                 value_loss,
-                 reward_loss_decay,
-                 reward_loss,
-                 regularization_decay
-                 ):
-        self.game_config = game_config
-        self.batch_size = batch_size
-        self.num_unroll_steps = num_unroll_steps
-        self.td_steps = td_steps
-        self.optimizer = optimizer
-        self.training_steps = training_steps
-        self.checkpoint_interval = checkpoint_interval
-        self.value_loss_decay = value_loss_decay
-        self.value_loss = value_loss
-        self.reward_loss_decay = reward_loss_decay
-        self.reward_loss = reward_loss
-        self.regularization_decay = regularization_decay
-
-
-class MCTSConfig:
-    def __init__(self,
-                 game_config,
-                 max_moves,
-                 root_dirichlet_alpha,
-                 root_exploration_fraction,
-                 known_bounds,
-                 num_simulations,
-                 freezing_moves
-                 ):
-        self.game_config = game_config
-        self.max_moves = max_moves
-        self.root_dirichlet_alpha = root_dirichlet_alpha
-        self.root_exploration_fraction = root_exploration_fraction
-        self.known_bounds = known_bounds
-        self.num_simulations = num_simulations
-        self.freezing_moves = freezing_moves
-
-    def visit_softmax_temperature_fn(self, num_moves, training_steps):
-        if num_moves < self.freezing_moves:
-            return 1.0
+        if support_size is None:
+            self.loss: tf.keras.losses.Loss = tf.keras.losses.MeanSquaredError()
+            self.inv_to_scalar: Callable[[tf.Tensor], tf.Tensor] = lambda tensor: tf.expand_dims(tensor, axis=-1)
+            self.to_scalar: Callable[[tf.Tensor], tf.Tensor] = lambda tensor: tensor
         else:
-            return 0.0
+            self.loss: tf.keras.losses.Loss = tf.keras.losses.CategoricalCrossentropy()
+            self.inv_to_scalar: Callable[[tf.Tensor], tf.Tensor] = self.scalar_to_support
+            self.to_scalar: Callable[[tf.Tensor], tf.Tensor] = self.support_to_scalar
 
-    def exploration_function(self, parent_visit_count, child_visit_count):
-        return sqrt(2 * parent_visit_count) / (child_visit_count + 1)
+    def scalar_to_support(self, tensor: tf.Tensor) -> tf.Tensor:
+        a, b = self.known_bounds if self.known_bounds is not None else (0.0, 1.0)
+        return scalar_to_support((tensor-a)/(b-a), support_size=self.support_size)
+
+    def support_to_scalar(self, tensor: tf.Tensor) -> tf.Tensor:
+        a, b = self.known_bounds if self.known_bounds is not None else (0.0, 1.0)
+        return a + (b-a)*support_to_scalar(tensor, support_size=self.support_size)
+
+
+@dataclass
+class GameConfig:
+    """
+    game definition
+    """
+    name: str
+    environment_class: Callable[..., Environment]
+    environment_parameters: Dict[str, Any]
+    action_space_size: int
+    discount: float
+
+
+@dataclass
+class ReplayBufferConfig:
+    """replay buffer config
+
+    window_size: the number of most recent games from which replays are sampled
+    
+    prefetch_buffer_size: controls the number of batches the replay
+            buffer prepares in advance, to be ready before they are
+            required by the training process. This enters as a
+            parameter directly in a tf.data.Dataset (
+            https://www.tensorflow.org/api_docs/python/tf/data/Dataset#prefetch
+            ), and should improve performance when actual preparation
+            of a batch takes a long time (e.g. because batch_size is
+            large), effectively making it run asynchronously with
+            training.
+    """
+    window_size: int
+    prefetch_buffer_size: int
+
+
+@dataclass
+class TrainingConfig:
+    """
+    Training configuration.
+    """
+    optimizer: tf.keras.optimizers.Optimizer
+    batch_size: int
+    training_steps: int
+    checkpoint_interval: int
+    replay_buffer_loginterval: int
+    num_unroll_steps: int
+    td_steps: int
+    steps_per_execution: int
+
+
+@dataclass
+class MCTSConfig:
+    """
+    MCTS configuration
+    """
+    max_moves: int
+    root_dirichlet_alpha: float
+    root_exploration_fraction: float
+    num_simulations: int
+    temperature: float
+    freezing_moves: int
+    default_value: Value
 
 
 class NetworkConfig:
-    def __init__(self, network_class, state_action_encoder, network_parameters):
-        self.network_class = network_class
-        self.state_action_encoder = state_action_encoder
-        self.network_parameters = network_parameters
+    REPRESENTATION = 'representation'
+    DYNAMICS = 'dynamics'
+    PREDICTION = 'prediction'
+    INITIAL_INFERENCE = 'initial_inference'
+    RECURRENT_INFERENCE = 'recurrent_inference'
+    UNROLLED_MODEL = 'unrolled_model'
+    OBSERVATION = 'observation'
+    ACTION = 'action'
+    HIDDEN_STATE = 'hidden_state'
+    UNROLL_ACTIONS = 'unroll_actions'
+    UNROLLED_REWARDS = 'unrolled_rewards'
+    UNROLLED_VALUES = 'unrolled_values'
+    UNROLLED_POLICY_LOGITS = 'unrolled_policy_logits'
 
-    def make_uniform_network(self):
-        return self.network_class(state_action_encoder=self.state_action_encoder, **self.network_parameters)
+    def __init__(self,
+                 network_class: Callable,
+                 **network_parameters
+                 ) -> None:
+        self.network_class: Callable = network_class
+        self.network_parameters: Dict[str, Any] = network_parameters
 
 
 class MuZeroConfig:
-    def __init__(self, game_config, replay_buffer_config, training_config, mcts_config, network_config):
-        self.game_config = game_config
-        self.replay_buffer_config = replay_buffer_config
-        self.training_config = training_config
-        self.mcts_config = mcts_config
-        self.network_config = network_config
+    def __init__(self, game_config: GameConfig,
+                 replay_buffer_config: ReplayBufferConfig,
+                 training_config: TrainingConfig,
+                 mcts_config: MCTSConfig,
+                 network_config: NetworkConfig,
+                 reward_config: ScalarConfig,
+                 value_config: ScalarConfig) -> None:
+        self.game_config: GameConfig = game_config
+        self.replay_buffer_config: ReplayBufferConfig = replay_buffer_config
+        self.training_config: TrainingConfig = training_config
+        self.mcts_config: MCTSConfig = mcts_config
+        self.network_config: NetworkConfig = network_config
+        self.reward_config: ScalarConfig = reward_config
+        self.value_config: ScalarConfig = value_config
+
+    def action_space(self):
+        return [Action(index) for index in range(self.game_config.action_space_size)]
+
+    def create_environment(self) -> Environment:
+        return self.game_config.environment_class(**self.game_config.environment_parameters)
+
+    def make_uniform_network(self):  # TODO: How do we avoid circular dependencies with type-hinting?
+        return self.network_config.network_class(self, **self.network_config.network_parameters)
+
+    def visit_softmax_temperature_fn(self, num_moves: int, training_steps: int) -> float:
+        if num_moves < self.mcts_config.freezing_moves:
+            return self.mcts_config.temperature
+        else:
+            return 0.0
+
+    def exploration_function(self, parent_visit_count: int, child_visit_count: int) -> float:
+        return 2 * log(parent_visit_count + 1) / (child_visit_count + 1)
+
+    def hyperparameters(self):
+        hyperparameters = {}
+        hparams_safe_update(hyperparameters, self.game_config.environment_parameters)
+        hparams_safe_update(hyperparameters, self.network_config.network_parameters)
+        hparams_safe_update(hyperparameters, self.training_config.optimizer.get_config())
+
+        hparams_safe_update(hyperparameters, vars(self.game_config))
+        hparams_safe_update(hyperparameters, vars(self.replay_buffer_config))
+        hparams_safe_update(hyperparameters, vars(self.network_config))
+        hparams_safe_update(hyperparameters, vars(self.training_config))
+        hparams_safe_update(hyperparameters, vars(self.mcts_config))
+        return hyperparameters

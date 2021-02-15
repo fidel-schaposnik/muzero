@@ -1,110 +1,68 @@
-import gym
+import tensorflow as tf
 
-from config import *
-from network import *
+from muzero.config import MuZeroConfig, GameConfig, ReplayBufferConfig, MCTSConfig, NetworkConfig, TrainingConfig, ScalarConfig
+from muzero.utils import KnownBounds
+from muzero.environment import OpenAIEnvironment
+from muzero.network import Network, binary_plane_encoder, scalar_to_support_model
+
+# For type annotations
+from muzero.muprover_types import Value
 
 
-def make_config():
+def make_config() -> MuZeroConfig:
     game_config = GameConfig(name='CartPole',
-                             environment_class=CartPoleEnvironment,
-                             environment_parameters={},
+                             environment_class=OpenAIEnvironment,
+                             environment_parameters={'gym_id': 'CartPole-v1'},
                              action_space_size=2,
-                             num_players=1,
                              discount=0.99
                              )
 
-    replay_buffer_config = ReplayBufferConfig(window_size=int(1e5))
+    replay_buffer_config = ReplayBufferConfig(window_size=int(1e3),
+                                              prefetch_buffer_size=10
+                                              )
 
-    mcts_config = MCTSConfig(game_config=game_config,
-                             max_moves=500,
+    mcts_config = MCTSConfig(max_moves=500,
                              root_dirichlet_alpha=1.0,
                              root_exploration_fraction=0.25,
-                             known_bounds=None,
-                             num_simulations=16,
-                             freezing_moves=20
+                             num_simulations=4,
+                             temperature=1.0,
+                             freezing_moves=50,
+                             default_value=Value(50.0)
                              )
 
     network_config = NetworkConfig(network_class=CartPoleNetwork,
-                                   state_action_encoder=BinaryPlaneEncoder(),
-                                   network_parameters={
-                                       'num_layers': 2, 'num_units': 64,  # Fully connected network parameters
-                                       'policy_filters': 32, 'policy_kernel_size': (3, 3),  # Policy head parameters
-                                       'value_filters': 32, 'value_kernel_size': (3, 3),  # Value head parameters
-                                       'reward_filters': 32, 'reward_kernel_size': (3, 3),  # Reward head parameters
-                                       'hidden_size': 32, 'scalar_activation': 'relu'  # Parameters shared by value and reward heads
-                                   }
+                                   regularizer=tf.keras.regularizers.l2(l=1e-4),
+                                   hidden_state_size=128,
+                                   hidden_size=128,
+                                   support_size=100
                                    )
 
-    training_config = TrainingConfig(game_config=game_config,
-                                     batch_size=2048,
-                                     num_unroll_steps=5,
-                                     td_steps=10,
-                                     optimizer=tf.keras.optimizers.Adam(lr=.001),
-                                     training_steps=int(1e5),
-                                     checkpoint_interval=int(5e2),
-                                     value_loss_decay=1.0,
-                                     value_loss=tf.keras.losses.mean_squared_error,
-                                     reward_loss_decay=1.0,
-                                     reward_loss=tf.keras.losses.mean_squared_error,
-                                     regularization_decay=1e-3
+    training_config = TrainingConfig(optimizer=tf.keras.optimizers.Adam(),
+                                     batch_size=128,
+                                     training_steps=int(2e5),
+                                     checkpoint_interval=int(1e3),
+                                     replay_buffer_loginterval=int(1e2),
+                                     num_unroll_steps=2,
+                                     td_steps=100,
+                                     steps_per_execution=1
                                      )
+
+    reward_config = ScalarConfig(known_bounds=KnownBounds(min=0.0, max=1.0),
+                                 support_size=None,
+                                 loss_decay=1.0
+                                 )
+
+    value_config = ScalarConfig(known_bounds=KnownBounds(min=0.0, max=100.0),
+                                support_size=100,
+                                loss_decay=0.1)
 
     return MuZeroConfig(game_config=game_config,
                         replay_buffer_config=replay_buffer_config,
                         mcts_config=mcts_config,
                         training_config=training_config,
-                        network_config=network_config)
-
-
-class CartPoleEnvironment(Environment):
-    """
-    The environment class of cart-pole.
-    """
-
-    def __init__(self, **kwargs):  # kwargs collects arguments not used here (network parameters)
-        super().__init__(action_space_size=2, num_players=1)
-        self.env = gym.make('CartPole-v1')
-        self.state = self.env.reset()
-        self.ended = False
-        self.cumulative_reward = 0.0
-        self.max_moves = self.env._max_episode_steps
-
-    def is_legal_action(self, action):
-        return True
-
-    def to_play(self):
-        return Player(0)
-
-    def terminal(self):
-        return self.ended
-
-    def outcome(self):
-        assert self.ended
-
-        return self.cumulative_reward
-
-    def step(self, action):
-        assert not self.ended and self.is_legal_action(action)
-
-        self.state, reward, self.ended, _ = self.env.step(action.index)
-        self.cumulative_reward += reward
-        return reward
-
-    def get_state(self):
-        return self.state
-
-
-# class CartPoleGame(Game):
-#     def __init__(self, **game_params):
-#         super().__init__(environment=CartPoleEnvironment(**game_params))
-#         self.history.observations.append(self.make_image())
-#
-#     def state_repr(self, state_index=-1):
-#         # self.environment.env.render()
-#         return 'Cart position: {}\nCart velocity: {}\nPole angle: {}\nPole velocity at tip: {}'.format(*self.history.observations[state_index])
-#
-#     def make_image(self):
-#         return np.append(self.environment.get_state(), len(self.history)/self.environment.max_moves).astype(np.float32)
+                        network_config=network_config,
+                        reward_config=reward_config,
+                        value_config=value_config)
 
 
 class CartPoleNetwork(Network):
@@ -112,54 +70,75 @@ class CartPoleNetwork(Network):
     Neural networks for cart-pole game.
     """
 
-    def __init__(self, state_action_encoder,
-                 num_layers, num_units,  # Fully connected network parameters
-                 policy_filters, policy_kernel_size,  # Policy head parameters
-                 value_filters, value_kernel_size,  # Value head parameters
-                 reward_filters, reward_kernel_size,  # Reward head parameters
-                 hidden_size, scalar_activation  # For value and reward heads
-                 ):
+    def __init__(self,
+                 config: MuZeroConfig,
+                 regularizer: tf.keras.regularizers.Regularizer,
+                 hidden_state_size: int,
+                 hidden_size: int,
+                 support_size: int
+                 ) -> None:
         """
-        Representation input (observation batch):       (batch_size, 5).
-        Representation output (hidden state batch):     (batch_size, num_units, 1, 1)
+        Representation input (observation batch):       (batch_size, 4, support_size+1).
+        Representation output (hidden state batch):     (batch_size, 1, hidden_state_size)
 
-        Encoded action batch:                           (batch_size, num_units, 1, 1)
+        Encoded action batch:                           (batch_size, 1+1, hidden_state_size)
 
-        Dynamics input:                                 (batch_size, num_units, 1, 2)
+        Dynamics input:                                 (batch_size, 2, hidden_state_size)
         Dynamics outputs:
-            - batch_hidden_state:                       (batch_size, num_units, 1, 1)
-            - batch_reward:                             (batch_size, num_players=1)
-            - batch_toplay:                             (batch_size, num_players=1)
+            - hidden_state:                             (batch_size, 1, hidden_state_size)
+            - reward:                                   (batch_size, )
 
-        Prediction input:                               (batch_size, num_units, 1, 1)
+        Prediction input:                               (batch_size, 1, hidden_state_size)
         Prediction outputs:
-            - batch_policy_logits:                      (batch_size, action_space_size=2)
-            - batch_value:                              (batch_size, num_players=1)
+            - policy_logits:                            (batch_size, action_space_size=2)
+            - value:                                    (batch_size, )
         """
 
-        super().__init__(state_action_encoder=state_action_encoder)
+        cartpole_state_preprocessing: tf.keras.Model = scalar_to_support_model(input_shape=(4,),
+                                                                               scalar_min=tf.constant([-4.8, -5., -0.418, -5.]),
+                                                                               scalar_max=tf.constant([4.8, 5., 0.418, 5.]),
+                                                                               support_size=support_size)
 
-        self.representation = fully_connected_representation_network(name='CPRep', input_shape=(4,),
-                                                                     num_layers=num_layers, num_units=num_units)
+        cartpole_representation: tf.keras.Model = tf.keras.Sequential([
+            tf.keras.layers.Conv1D(filters=hidden_size, kernel_size=4, padding='valid', activation='relu',
+                                   kernel_regularizer=regularizer, bias_regularizer=regularizer,
+                                   input_shape=(4, support_size+1)),
+            tf.keras.layers.Dense(units=hidden_state_size, activation='relu',
+                                  kernel_regularizer=regularizer, bias_regularizer=regularizer)
+        ], name=config.network_config.REPRESENTATION)
 
-        self.dynamics = fully_connected_dynamics_network(name='CPDyn', input_shape=(num_units, 1, 2),
-                                                         num_layers=num_layers, num_units=num_units,
-                                                         reward_filters=reward_filters, reward_kernel_size=reward_kernel_size,
-                                                         reward_hidden_size=hidden_size, scalar_activation=scalar_activation)
+        encoded_state_action = tf.keras.Input(shape=(2, hidden_state_size))
+        x = tf.keras.layers.Conv1D(filters=hidden_size, kernel_size=2, padding='valid', activation='relu',
+                                   kernel_regularizer=regularizer, bias_regularizer=regularizer)(encoded_state_action)
+        hidden_state = tf.keras.layers.Dense(units=hidden_state_size, activation='relu',
+                                             kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
+        x = tf.keras.layers.Flatten()(hidden_state)
+        x = tf.keras.layers.Dense(units=hidden_size, activation='relu',
+                                  kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
+        reward_output = tf.keras.layers.Dense(units=1, activation='sigmoid', kernel_regularizer=regularizer,
+                                              bias_regularizer=regularizer, name='reward')(x)
+        cartpole_dynamics: tf.keras.Model = tf.keras.Model(inputs=encoded_state_action,
+                                                           outputs=[hidden_state, reward_output],
+                                                           name=config.network_config.DYNAMICS)
 
-        self.prediction = fully_connected_prediction_network(name='CPPre', input_shape=(num_units, 1, 1), num_logits=2,
-                                                             num_layers=num_layers, num_units=num_units,
-                                                             policy_filters=policy_filters, policy_kernel_size=policy_kernel_size,
-                                                             value_filters=value_filters, value_kernel_size=value_kernel_size,
-                                                             value_hidden_size=hidden_size, scalar_activation=scalar_activation)
+        hidden_state = tf.keras.Input(shape=(1, hidden_state_size))
+        x = tf.keras.layers.Flatten()(hidden_state)
+        x = tf.keras.layers.Dense(units=hidden_size, activation='relu',
+                                  kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
+        x = tf.keras.layers.Dense(units=hidden_size, activation='relu',
+                                  kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
+        value_output = tf.keras.layers.Dense(units=support_size+1, activation='softmax', name='value',
+                                             kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
+        policy_logits_output = tf.keras.layers.Dense(units=2, name='policy_logits',
+                                                     kernel_regularizer=regularizer, bias_regularizer=regularizer)(x)
 
-        self.state_action_encoding = state_action_encoder
+        cartpole_prediction: tf.keras.Model = tf.keras.Model(inputs=hidden_state,
+                                                             outputs=[value_output, policy_logits_output],
+                                                             name=config.network_config.PREDICTION)
 
-        self.trainable_variables = []
-        for sub_network in [self.representation, self.dynamics, self.prediction]:
-            self.trainable_variables.extend(sub_network.trainable_variables)
-
-    def hidden_state_shape(self, batch_size=None):
-        input_shape = list(self.prediction.input_shape)
-        input_shape[0] = batch_size
-        return tuple(input_shape)
+        super().__init__(config=config,
+                         representation=cartpole_representation,
+                         dynamics=cartpole_dynamics,
+                         prediction=cartpole_prediction,
+                         state_action_encoder=binary_plane_encoder(state_shape=(1, hidden_state_size), axis=0),
+                         state_preprocessing=cartpole_state_preprocessing)

@@ -1,11 +1,30 @@
-class ImplementationError(Exception):
+class MuProverError(Exception):
+    """
+    Base class for exceptions in MuProver.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    def __repr__(self) -> str:
+        return self.message
+
+
+class MuProverImplementationError(MuProverError):
     """
     Exception for un-implemented methods in base classes.
     """
 
-    def __init__(self, function_name, class_name):
-        self.function_name = function_name
-        self.class_name = class_name
+    def __init__(self, function_name: str, class_name: str):
+        super().__init__(message=f'function {function_name} needs to be implemented by {class_name}')
+        self.function_name: str = function_name
+        self.class_name: str = class_name
 
-    def __str__(self):
-        return 'function {} needs to be implemented by {}'.format(self.function_name, self.class_name)
+
+class MuProverEnvironmentError(MuProverError):
+    """
+    Exception for the environment classes.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message=message)

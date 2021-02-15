@@ -1,52 +1,42 @@
-from environment import Action
+# For type annotations
+from typing import List, Dict, Optional, Any
+
+from muzero.muprover_types import State, Observation, Value, Policy, ValueBatch, PolicyBatch, ActionBatch, Action
+from muzero.environment import Environment
 
 
 class GameHistory:
     """
     Book-keeping class for completed games.
+    Restricted to 1-player games with no intermediate rewards for MuProver.
     """
 
-    def __init__(self):
-        self.observations = []
-        self.actions = []
-        self.rewards = []
-        self.to_plays = []
-        self.root_values = []
-        self.policies = []
+    def __init__(self) -> None:
+        self.states: List[State] = []
+        self.actions: List[Action] = []
+        self.rewards: List[Value] = []
+        self.root_values: List[Value] = []
+        self.policies: List[Policy] = []
+        self.metadata: Dict[str, Any] = {}
 
-    def __str__(self):
+        # The following are only filled once within a replay buffer
+        self.extended_actions: Optional[ActionBatch] = None
+        self.target_rewards: Optional[ValueBatch] = None
+        self.target_values: Optional[ValueBatch] = None
+        self.target_policies: Optional[PolicyBatch] = None
+        self.total_value: Value = Value(float('nan'))
+
+    def make_image(self, index: int = -1) -> Observation:
+        """
+        TODO: If necessary, stack multiple states to create an observation.
+        """
+        return Observation(self.states[index])
+
+    def __repr__(self) -> str:
         return 'Game({})'.format(', '.join(map(str, self.actions)))
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.actions)
-
-    def compute_target_value(self, index, td_steps, discount):
-        bootstrap_index = index + td_steps
-        if bootstrap_index < len(self.root_values):
-            value = self.root_values[bootstrap_index] * discount ** td_steps
-        else:
-            value = 0
-
-        for i, reward in enumerate(self.rewards[index:bootstrap_index]):
-            sign = 1 if self.to_plays[index+i] == self.to_plays[index] else -1
-            value += sign * reward * discount ** i
-        return value
-
-    def make_target(self, state_index, num_unroll_steps, td_steps, discount):
-        targets = []
-        for current_index in range(state_index, state_index + num_unroll_steps + 1):
-            value = self.compute_target_value(current_index, td_steps, discount)
-
-            if 0 < current_index <= len(self.rewards):
-                last_reward = self.rewards[current_index - 1]
-            else:
-                last_reward = 0
-
-            if current_index < len(self.root_values):
-                targets.append((value, last_reward, self.policies[current_index]))
-            else:
-                targets.append((value, last_reward, [1/len(self.policies[-1])]*len(self.policies[-1])))
-        return targets
 
 
 class Game:
@@ -54,38 +44,24 @@ class Game:
     A class to record episodes of interaction with an Environment.
     """
 
-    def __init__(self, environment):
-        self.environment = environment
-        self.history = GameHistory()
+    def __init__(self, environment: Environment) -> None:
+        self.environment: Environment = environment
+        self.history: GameHistory = GameHistory()
+        self.history.states.append(self.environment.reset())
+        self.ended: bool = False
 
-    def to_play(self):
-        return self.environment.to_play()
-
-    def legal_actions(self):
+    def legal_actions(self) -> List[Action]:
         return self.environment.legal_actions()
 
-    def terminal(self):
-        return self.environment.terminal()
+    def terminal(self) -> bool:
+        return self.ended
 
-    def outcome(self):
-        return self.environment.outcome()
-
-    def apply(self, action):
-        reward = self.environment.step(action)
-        self.history.observations.append(self.make_image())
+    def apply(self, action: Action) -> None:
+        state, reward, self.ended, info = self.environment.step(action)
+        self.history.states.append(state)
         self.history.actions.append(action)
         self.history.rewards.append(reward)
-        self.history.to_plays.append(self.to_play())
 
-    def store_search_statistics(self, root):
-        action_space = map(Action, range(self.environment.action_space_size))
-        self.history.policies.append([
-            root.children[a].visit_count / root.visit_count if a in root.children else 0 for a in action_space
-        ])
-        self.history.root_values.append(float(root.value()))
-
-    def make_image(self):
-        """
-        If necessary, encode the state representation (returned by environment.get_state) into an np.array.
-        """
-        return self.environment.get_state()
+    def store_search_statistics(self, policy: Policy, value: Value) -> None:
+        self.history.root_values.append(value)
+        self.history.policies.append(policy)

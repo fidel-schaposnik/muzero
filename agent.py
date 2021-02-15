@@ -1,69 +1,126 @@
 import random
 import time
-import argparse
-import numpy as np
 import tensorflow as tf
-from math import exp
+import numpy as np
+from math import isnan
 
-from game import *
-from exceptions import *
-from environment import RemoteEnvironment, Player
-from replay_buffer import RemoteReplayBuffer
-from network import RemoteNetwork
-from utils import MinMaxStats, load_game
+from muzero.game import Game
+from muzero.exceptions import MuProverImplementationError
+from muzero.utils import random_id, MinMaxStats
+
+# For type annotations
+from typing import Optional, Dict, List, Tuple, Union
+
+from muzero.muprover_types import Policy, Value, Observation, ObservationBatch, Action
+from muzero.game import GameHistory
+from muzero.environment import Environment
+from muzero.network import Network, NetworkOutput
+from muzero.network_services import RemoteNetwork
+from muzero.config import MuZeroConfig
 
 
 class Agent:
-    def play_game(self, environment):
-        """
-        Plays a game in the Environment.
-        """
+    """
+    An agent playing a game in an Environment.
+    """
+
+    def __init__(self, agent_id: Optional[str] = None) -> None:
+        self.agent_id: str = agent_id if agent_id else 'agent_'+random_id()
+
+    def play_game(self, environment: Environment) -> GameHistory:
         start = time.time()
         game = Game(environment=environment)
         while not game.terminal():
+            # game.environment.env.render()
             action = self.make_move(game)
-            # print('Player {} performs {}'.format(game.to_play(), action))
+            # print(f'Performing {action}')
             game.apply(action)
         end = time.time()
-        print('Finished playing a game in {:.2f} seconds, {:.2f} seconds per move!'.format(end-start, (end-start)/len(game.history)))
+
+        game.history.metadata['agent_id'] = self.agent_id
+        game.history.metadata['timing'] = end-start
+        game.history.metadata.update(self.fill_metadata())
         return game.history
 
-    def make_move(self, game):
+    def make_move(self, game: Game) -> Action:
         """
         Choose a move to play in the Game.
         """
-        raise ImplementationError('make_move', 'Agent')
+        raise MuProverImplementationError('make_move', 'Agent')
+
+    def fill_metadata(self) -> Dict[str, str]:
+        """
+        Sub-classed agents can use this callback to add further metadata to saved games.
+        """
+        return {}
 
 
 class RandomAgent(Agent):
     """
     Completely random agent, for testing purposes.
     """
-    def make_move(self, game):
-        return random.choice(game.legal_actions())
+
+    def make_move(self, game: Game) -> Action:
+        legal_actions = game.legal_actions()
+        policy = np.zeros(game.environment.action_space_size)
+        policy[legal_actions] = 1 / len(legal_actions)
+        game.store_search_statistics(Policy(tf.constant(policy)), Value(random.random()))
+        return random.choice(legal_actions)
+
+
+class NetworkAgent(Agent):
+    """
+    Agent choosing the next action according to a network's policy outputs.
+    This is roughly like MCTSAgent with num_simulations = 0.
+    """
+
+    def __init__(self, network: Network, temperature: float = 0.0, debug: bool = False) -> None:
+        super().__init__()
+        self.network: Network = network
+        self.temperature: float = temperature
+        self.debug: bool = debug
+
+    def make_move(self, game: Game) -> Action:
+        observation_batch = ObservationBatch(tf.expand_dims(game.history.make_image(), axis=0))
+        batch_network_output = self.network.initial_inference(observation_batch)
+        network_output = batch_network_output.split_batch()[0]
+
+        legal_actions = game.legal_actions()
+        policy = network_output.masked_policy(legal_actions)
+        game.store_search_statistics(Policy(tf.constant(policy)), network_output.value)
+
+        if self.temperature == 0:
+            _, action = max(zip(policy[legal_actions], legal_actions))
+            return action
+        else:
+            weights = policy[legal_actions] ** (1 / self.temperature)
+            return random.choices(legal_actions, weights=weights, k=1)[0]
 
 
 class Node:
-    def __init__(self, prior=1.0, parent=None):
-        self.visit_count = 0
-        self.to_play = -1
-        self.prior = prior
-        self.value_sum = 0
-        self.children = {}
-        self.hidden_state = None
-        self.reward = 0
-        self.parent = parent
+    def __init__(self, prior: float = 1.0, parent: Optional['Node'] = None) -> None:
+        self.parent: Optional[Node] = parent
+        self.prior: float = prior
+        self.children: Dict[Action, Node] = {}
+        self.hidden_state: Optional[Observation] = None
+        self.reward: Optional[Value] = None
 
-    def expanded(self):
+        self.value_sum: Value = Value(0.0)
+        self.visit_count: int = 0
+        self.value: Value = Value(float('nan'))
+
+    def expanded(self) -> bool:
         return len(self.children) > 0
 
-    def value(self):
-        if self.visit_count == 0:
-            return 0
-        return self.value_sum / self.visit_count
+    def update_value(self, value: Value) -> Value:
+        self.value_sum += value
+        self.visit_count += 1
+        self.value = Value(self.value_sum / self.visit_count)
+        return self.value
 
-    def print(self, _prefix='', name='Root', _last=True):
-        print(_prefix, '`- ' if _last else '|- ', '{}: value={}; reward={}'.format(name, float(self.value()), float(self.reward)), sep="")
+    def print(self, _prefix: str = '', name: str = 'Root', _last: bool = True) -> None:
+        print(_prefix, '`- ' if _last else '|- ',
+              f'{name}-{self.visit_count}: prior={self.prior:.2f}; value={self.value:.4f}', sep="")
         _prefix += '   ' if _last else '|  '
         child_count = len(self.children)
         for i, (action, child) in enumerate(self.children.items()):
@@ -71,143 +128,96 @@ class Node:
             child.print(_prefix, action, _last)
 
 
-class NetworkAgent(Agent):
-    """
-    Agent greedily choosing the best action according to a network's policy outputs.
-    This is essentially like MCTSAgent with num_simulations = 0.
-    """
-    def __init__(self, network):
-        self.network = network
-
-    def make_move(self, game):
-        observation = np.array([game.make_image()], dtype=np.float32)
-        policy_logits = self.network.initial_inference(observation).split_batch()[0].policy_logits
-        # print(policy_logits)
-        _, action = max([(policy_logits[action], action) for action in game.legal_actions()])
-        return action
-
 class MCTSAgent(Agent):
     """
     Use Monte-Carlo Tree-Search to select moves.
     """
-    def __init__(self, mcts_config, network):
-        self.config = mcts_config
-        self.network = network
+    def __init__(self, config: MuZeroConfig,
+                 network: Union[Network, RemoteNetwork],
+                 agent_id: Optional[str] = None,
+                 debug: bool = False
+                 ) -> None:
+        super().__init__(agent_id=agent_id)
+        self.config: MuZeroConfig = config
+        self.network: Network = network
+        self.debug: bool = debug
 
     @staticmethod
-    def expand_node(node, to_play, actions, network_output):
-        node.to_play = to_play
+    def expand_node(node: Node, actions: List[Action], network_output: NetworkOutput) -> None:
         node.hidden_state = network_output.hidden_state
         node.reward = network_output.reward
-        policy = {a: exp(network_output.policy_logits[a]) for a in actions}
-        policy_sum = sum(policy.values())
-        for action, p in policy.items():
-            node.children[action] = Node(prior=p/policy_sum, parent=node)
+        policy = network_output.masked_policy(actions)
+        for action, p in zip(actions, policy):
+            node.children[action] = Node(prior=p, parent=node)
 
     @staticmethod
-    def softmax_sample(distribution, temperature):
+    def softmax_sample(distribution: List[Tuple[int, Action]], temperature: float) -> Tuple[int, Action]:
         if temperature == 0.0:
             return max(distribution)
         else:
-            weights = np.array([count ** (1 / temperature) for count, action in distribution])
-            weights /= sum(weights)
-            return random.choices(distribution, weights=weights)[0]
+            weights = [count ** (1 / temperature) for count, action in distribution]
+            return random.choices(distribution, weights=weights, k=1)[0]
 
-    def add_exploration_noise(self, node):
+    def add_exploration_noise(self, node: Node) -> None:
         actions = list(node.children.keys())
-        noise = np.random.dirichlet([self.config.root_dirichlet_alpha] * len(actions))
-        frac = self.config.root_exploration_fraction
+        noise = np.random.dirichlet([self.config.mcts_config.root_dirichlet_alpha] * len(actions))
+        frac = self.config.mcts_config.root_exploration_fraction
         for a, n in zip(actions, noise):
             node.children[a].prior = node.children[a].prior * (1 - frac) + n * frac
 
-    def select_leaf(self, node, num_moves, min_max_stats):
-        action = None
+    def select_leaf(self, node: Node, min_max_stats: MinMaxStats) -> Tuple[Action, Node]:
+        action = Action(-1)
         while node.expanded():
             action, node = self.select_child(node, min_max_stats)
-            num_moves += 1
-        return action, node, num_moves
+        return action, node
 
-    def select_child(self, node, min_max_stats):
-        # print({action: float(self.ucb_score(child, min_max_stats)) for action, child in node.children.items()})
-        _, action, child = max(
-            (self.ucb_score(child, min_max_stats), action, child) for action, child in node.children.items())
-        # print('Going down {}'.format(action))
-        # input('Press any key to continue...')
+    def select_child(self, node: Node, min_max_stats: MinMaxStats) -> Tuple[Action, Node]:
+        _, action, child = max((self.ucb_score(child, min_max_stats), a, child) for a, child in node.children.items())
         return action, child
 
-    def ucb_score(self, node, min_max_stats):
+    def ucb_score(self, node: Node, min_max_stats: MinMaxStats) -> float:
+        exploitation_score = self.config.mcts_config.default_value if isnan(node.value) else node.value
         exploration_score = node.prior * self.config.exploration_function(node.parent.visit_count, node.visit_count)
-        if node.visit_count > 0:
-            exploitation_score = node.reward + self.config.game_config.discount * min_max_stats.normalize(node.value())
-        else:
-            exploitation_score = 0
-        return exploration_score + exploitation_score
+        return min_max_stats.normalize(exploitation_score) + exploration_score
 
-    def backpropagate(self, node, value, to_play, min_max_stats):
-        while node:
-            node.value_sum += value if node.to_play == to_play else -value
-            node.visit_count += 1
-            min_max_stats.update(node.value())
-            value = node.reward + self.config.game_config.discount * value  # This probably needs to take into account to_play!
+    def backpropagate(self, node: Node, value: Value, min_max_stats: MinMaxStats) -> None:
+        while node is not None:
+            min_max_stats.update(node.update_value(value))
+            value = node.reward + self.config.game_config.discount * value if node.reward is not None else Value(float('nan'))
             node = node.parent
 
-    def run_mcts(self, root, num_moves):
-        min_max_stats = MinMaxStats(self.config.known_bounds)
+    def run_mcts(self, root: Node, min_max_stats: MinMaxStats) -> None:
+        for _ in range(self.config.mcts_config.num_simulations):
+            if self.debug:
+                root.print()
+            action, leaf = self.select_leaf(root, min_max_stats)
 
-        for _ in range(self.config.num_simulations):
-            # root.print()
-            action, leaf, cur_moves = self.select_leaf(root, num_moves, min_max_stats)
-            to_play = Player(cur_moves % self.config.game_config.num_players)
+            batch_hidden_state = ObservationBatch(tf.expand_dims(leaf.parent.hidden_state, axis=0))
+            batch_network_output = self.network.recurrent_inference(batch_hidden_state, tf.constant([action]))
+            network_output = batch_network_output.split_batch()[0]
+            self.expand_node(node=leaf, actions=self.config.action_space(), network_output=network_output)
+            self.backpropagate(leaf, network_output.value, min_max_stats)
 
-            batch_hidden_state = tf.expand_dims(leaf.parent.hidden_state, axis=0)
-            network_output = self.network.recurrent_inference(batch_hidden_state, [action]).split_batch()[0]
-            self.expand_node(node=leaf, to_play=to_play, actions=self.config.game_config.action_space,
-                             network_output=network_output)
-            self.backpropagate(leaf, network_output.value, to_play, min_max_stats)
-
-    def select_action(self, node, num_moves):
+    def select_action(self, node: Node, num_moves: int) -> Action:
         visit_counts = [(child.visit_count, action) for action, child in node.children.items()]
         t = self.config.visit_softmax_temperature_fn(num_moves=num_moves, training_steps=self.network.training_steps())
         _, action = self.softmax_sample(visit_counts, t)
         return action
 
-    def make_move(self, game):
+    def make_move(self, game: Game) -> Action:
         root = Node()
-        observation = np.array([game.make_image()], dtype=np.float32)
-        self.expand_node(node=root, to_play=game.to_play(), actions=game.legal_actions(),
+        min_max_stats = MinMaxStats(known_bounds=self.config.value_config.known_bounds)
+        observation = ObservationBatch(tf.expand_dims(game.history.make_image(), axis=0))
+        self.expand_node(node=root,
+                         actions=game.legal_actions(),
                          network_output=self.network.initial_inference(observation).split_batch()[0])
         self.add_exploration_noise(root)
+        self.run_mcts(root, min_max_stats)
 
-        self.run_mcts(root, len(game.history))
-        game.store_search_statistics(root)
+        action_space = self.config.action_space()
+        policy = [root.children[a].visit_count / root.visit_count if a in root.children else 0 for a in action_space]
+        game.store_search_statistics(Policy(tf.constant(policy)), root.value)
         return self.select_action(root, len(game.history))
 
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='MuZero MCTS Agent')
-    parser.add_argument('--game', type=str, required=True,
-                        help='One of the games implemented in the games/ directory')
-    parser.add_argument('--replay_buffer', type=str, required=True,
-                        help='IP:Port for gRPC communication with a replay buffer server')
-    parser.add_argument('--environment', type=str, required=True,
-                        help='IP:Port for gRPC communication with an environment server')
-    parser.add_argument('--network', type=str, required=True,
-                        help='IP:Port for gRPC communication with a network server')
-    parser.add_argument('--num_games', type=int, default=int(1e10),
-                        help='Number of games to play (defaults to infinity)')
-    args = parser.parse_args()
-
-    config = load_game(args.game, parser)
-
-    remote_replay_buffer = RemoteReplayBuffer(ip_port=args.replay_buffer)
-
-    remote_network = RemoteNetwork(network_config=config.network_config,
-                                   ip_port=args.network)
-
-    agent = MCTSAgent(config.mcts_config, remote_network)
-
-    for _ in range(args.num_games):
-        remote_environment = RemoteEnvironment(game_config=config.game_config,
-                                               ip_port=args.environment)
-        game_history = agent.play_game(remote_environment)
-        remote_replay_buffer.save_history(game_history)
+    def fill_metadata(self) -> Dict[str, str]:
+        return {'network_id': str(self.network.training_steps())}

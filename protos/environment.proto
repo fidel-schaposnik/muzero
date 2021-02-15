@@ -1,39 +1,56 @@
 syntax = "proto3";
 
-package tensorflow.muzero;
+package tensorflow.muprover;
 
 import "tensorflow/core/framework/tensor.proto";
 
 service RemoteEnvironment {
   rpc Initialization(InitializationRequest) returns (InitializationResponse) {}
-  rpc Step(ActionRequest) returns (ActionResponse) {}
+  rpc Finalization(FinalizationRequest) returns (FinalizationResponse) {}
+  rpc Step(StepRequest) returns (StepResponse) {}
+  rpc Reset(ResetRequest) returns (ResetResponse) {}
 }
 
 message State {
 	TensorProto observation = 1;
-	int32 to_play = 2;
-	repeated int32 legal_actions = 3;
+	repeated int32 legal_actions = 2;
 }
 
 message InitializationRequest {
-	map<string, int32> environment_parameters = 1;
+	map<string, bytes> environment_parameters = 1;
 }
 
 message InitializationResponse {
-	int32 environment_id = 1;
-	int32 action_space_size = 2;
-	int32 num_players  = 3;
-	State state = 4;
-}
-
-message ActionRequest {
-	int32 environment_id = 1;
-	int32 index = 2;
-}
-
-message ActionResponse {
 	bool success = 1;
-	float reward = 2;
-	State state = 3;
-	bool done = 5;
+	string environment_id = 2;
+}
+
+message FinalizationRequest {
+	string environment_id = 1;
+}
+
+message FinalizationResponse {
+	bool success = 1;
+}
+
+message ResetRequest {
+	string environment_id = 1;
+}
+
+message ResetResponse {
+	bool success = 1;
+	State state = 2;
+}
+
+message StepRequest {
+	string environment_id = 1;
+	int32 action = 2;
+}
+
+message StepResponse {
+	bool success = 1;
+	State state = 2;
+	float reward = 3;
+	bool done = 4;
+	map<string, bytes> info = 5;
 }
