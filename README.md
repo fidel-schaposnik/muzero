@@ -152,7 +152,7 @@ Follow these steps to train MuZero to play a given game:
 1. Start one or more self-playing agents `agent` using
 
    ```
-   muzero-agent --game GAME --environment ENVIRONMENT_IP:PORT --replay_buffer REPLAY_IP:PORT --network NETWORK_IP:PORT --num_games NUM_GAMES
+   python agent_services.py --game GAME --environment ENVIRONMENT_IP:PORT --replay_buffer REPLAY_IP:PORT --network NETWORK_IP:PORT --num_games NUM_GAMES
    ```
    
    where `GAME` is one of the games implemented in the `games` directory, the 
